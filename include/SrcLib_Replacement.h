@@ -436,7 +436,7 @@ class char_traits_no_case : public std::char_traits<U16unit>
 public:
 	static int compare(const char_type* s1, const char_type* s2, size_t n)
 	{
-		assert(n < std::numeric_limits<int>::max());
+		assert(static_cast<int>(n) < std::numeric_limits<int>::max());
 		return CompareNoCaseUnicode::CompareNoCaseUTF16(s1, s2, static_cast<int>(n));
 	}
 };

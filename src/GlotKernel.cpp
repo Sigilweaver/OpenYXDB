@@ -236,7 +236,7 @@ int GlotKernel::XL8(char* buffer, int cap, const char* msgKey, int N) const
 			buffer[0] = '\0';
 		return 0;
 	}
-	if (!this || !mpMsgQuery)
+	if (!mpMsgQuery)
 	{
 		// can't translate unless I have a language.
 		return CopyTextToBuffer(buffer, cap, msgKey, N);
