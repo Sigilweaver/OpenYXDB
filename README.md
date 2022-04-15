@@ -4,12 +4,13 @@ The [Alteryx](https://www.alteryx.com/) OpenYXDB provides a set of mechanisms to
 
 ## Requirements
 
-* reqires compiler with a support of C++17
-* reqires CMake 3.16 or later
+* Requires compiler with a support of C++17
+* Requires CMake 3.16 or later
+* (Windows) Visual Studio 2019 recommended
 
 ## Building
 
-The library was tested under MSVC19, GCC9, MingGW.
+The library was tested under Visual Studio 2019, GCC9, MingGW.
 
 ## Examples
 
