@@ -169,10 +169,14 @@ Open_AlteryxYXDB::~Open_AlteryxYXDB()
 			m_pCompressOutput->FlushBuffer();
 			m_header.userHdr.nNumRecords = m_nCurrentRecord;
 
-			// even if there is only 1 record this should be created
-			//assert(m_vRecordBlockIndexPos.size()>0);
 			m_header.userHdr.nRecordBlockIndexPos = m_pFile->Tell();
 			m_header.userHdr.nCompressionVersion = 1;
+
+			// Write the block index so readers can seek to arbitrary blocks
+			unsigned nIndexSize = static_cast<unsigned>(m_vRecordBlockIndexPos.size());
+			m_pFile->Write(&nIndexSize, sizeof(nIndexSize));
+			if (nIndexSize > 0)
+				m_pFile->Write(&m_vRecordBlockIndexPos[0], nIndexSize * sizeof(int64_t));
 
 			m_pFile->LSeek(0);
 			m_pFile->Write(&m_header, sizeof(m_header));
