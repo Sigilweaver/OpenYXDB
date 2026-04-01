@@ -1,0 +1,25 @@
+# Build
+build/
+cmake-build-*/
+
+# pixi environments
+.pixi/
+*.lock
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+*.so
+*.dylib
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*~
+
+# OS
+.DS_Store
+Thumbs.db
