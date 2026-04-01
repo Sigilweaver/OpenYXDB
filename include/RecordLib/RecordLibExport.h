@@ -4,7 +4,7 @@
 
 #pragma once
 
-#if defined(__linux__) || defined(BUILDING_SDK) || defined(BUILDING_OPEN_ALTERYX)
+#if defined(__linux__) || defined(__APPLE__) || defined(BUILDING_SDK) || defined(BUILDING_OPEN_ALTERYX)
 	#define RECORDLIB_EXPORT_CPP
 	#define E1ONLY_RECORDLIB_EXPORT_CPP
 #elif defined(RECORDLIB_DLL_EXPORTS) || defined(OPEN_ALTERYX_EXPORTS)
