@@ -10,7 +10,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from _openyxdb import FieldInfo, Reader, Writer
+from openyxdb._openyxdb import FieldInfo, Reader, Writer
 
 __all__ = [
     "FieldInfo",
