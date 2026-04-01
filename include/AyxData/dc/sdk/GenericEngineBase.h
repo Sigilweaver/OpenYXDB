@@ -21,7 +21,7 @@ const unsigned MaxFixedLengthStringSize = 16384;
 const unsigned MaxFieldLength64 = 0x7fffffffu;  // 2GB
 const unsigned MaxFieldLength32 = 0x0fffffffu;  // 256MB
 
-#if defined(_WIN64) || defined(E2) || defined(__linux__)
+#if defined(_WIN64) || defined(E2) || defined(__linux__) || defined(__APPLE__)
 const unsigned MaxFieldLength = MaxFieldLength64;
 #else
 const unsigned MaxFieldLength = MaxFieldLength32;

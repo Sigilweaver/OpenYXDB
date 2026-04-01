@@ -728,14 +728,7 @@ class SmartPointerRefObj
 	{
 		if (pData)
 		{
-#ifdef __GNUG__
-			//__sync_fetch_and_add(&pData->m_SmartPointerRefObj_refCount, -1);
-			//@todo: Check this!
-			(pData->m_SmartPointerRefObj_refCount)--;
-			if ((&pData->m_SmartPointerRefObj_refCount) == 0)
-#else
-			if (InterlockedDecrement(&pData->m_SmartPointerRefObj_refCount) == 0)
-#endif
+			if (--(pData->m_SmartPointerRefObj_refCount) == 0)
 			{
 				delete pData;
 				pData = nullptr;
@@ -745,13 +738,7 @@ class SmartPointerRefObj
 	inline void ReferenceObj()
 	{
 		if (pData)
-#ifdef __GNUG__
-			//__sync_fetch_and_add(&pData->m_SmartPointerRefObj_refCount, 1);
-			//@todo: Check this!
-			(pData->m_SmartPointerRefObj_refCount)++;
-#else
-			InterlockedIncrement(&pData->m_SmartPointerRefObj_refCount);
-#endif
+			++(pData->m_SmartPointerRefObj_refCount);
 	}
 
 public:

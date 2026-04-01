@@ -8,7 +8,7 @@
 	#define EXTERN_C
 #endif
 
-#if defined(__linux__) || defined(BUILDING_SDK) || defined(BUILDING_OPEN_ALTERYX)
+#if defined(__linux__) || defined(__APPLE__) || defined(BUILDING_SDK) || defined(BUILDING_OPEN_ALTERYX)
 	#define BASE_EXPORT
 	#define BASE_TEST_EXPORT
 	#define BASE_E2_EXPORT
