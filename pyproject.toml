@@ -1,0 +1,45 @@
+[build-system]
+requires = ["scikit-build-core>=0.10", "nanobind>=2.0"]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "openyxdb"
+version = "0.1.0"
+description = "Read and write Alteryx YXDB files"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.9"
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: C++",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering",
+]
+dependencies = []
+
+[project.optional-dependencies]
+arrow = ["pyarrow>=14.0"]
+pandas = ["pyarrow>=14.0", "pandas>=2.0"]
+polars = ["pyarrow>=14.0", "polars>=0.20"]
+all = ["pyarrow>=14.0", "pandas>=2.0", "polars>=0.20"]
+test = ["pytest>=7.0", "pyarrow>=14.0", "pandas>=2.0", "polars>=0.20"]
+
+[tool.scikit-build]
+cmake.build-type = "Release"
+cmake.args = ["-DOPENYXDB_BUILD_TESTS=OFF"]
+wheel.packages = ["python/openyxdb"]
+
+[tool.scikit-build.cmake.define]
+OPENYXDB_BUILD_TESTS = "OFF"
+OPENYXDB_BUILD_PYTHON = "ON"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
