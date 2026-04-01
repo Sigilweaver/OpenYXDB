@@ -20,7 +20,7 @@ pytest = ">=7.0"
 [tasks]
 configure = "cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=$CONDA_PREFIX"
 configure-debug = "cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DCMAKE_INSTALL_PREFIX=$CONDA_PREFIX"
-build = { cmd = "cmake --build build", depends-on = ["configure"] }
+build = { cmd = "cmake --build build && ln -sf $(pwd)/build/_openyxdb*.so python/openyxdb/ 2>/dev/null; ln -sf $(pwd)/build/libopenyxdb.so python/openyxdb/ 2>/dev/null; true", depends-on = ["configure"] }
 test = { cmd = "ctest --test-dir build --output-on-failure", depends-on = ["build"] }
 test-python = { cmd = "pytest tests/ -v", depends-on = ["build"] }
 clean = "rm -rf build"
