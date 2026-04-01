@@ -1,38 +1,120 @@
-cmake_minimum_required(VERSION 3.16)
-project(Open_AlteryxYXDB)
+cmake_minimum_required(VERSION 3.20)
+project(OpenYXDB VERSION 0.1.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
-set(CMAKE_CONFIGURATION_TYPES "Debug;Release")
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-IF(MSVC)
-	set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /wd4127 /wd4245 /wd4251 /wd4275 /wd4267 /wd4244 -EHa -J -MP -WX -W4")
-	set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} /Od /RTC1")
-	set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} /Ob2 /Oi /Zi")
-ELSE()
-	set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -pedantic -Wno-unknown-pragmas -Wno-parentheses -fPIC -funsigned-char -pthread -Wall")
-	set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -O0 -ggdb")
-ENDIF()
+# --- Library sources ---
 
-file(GLOB PROJECT_HEADERS include/Base/*.h include/RecordLib/*.h include/*.h)
-file(GLOB PROJECT_SOURCES src/*.cpp src/sqlite3.c)
-file(GLOB PROJECT_C_SOURCES src/lzf_c.c src/lzf_d.c)
+set(LIB_SOURCES
+    src/FieldBase.cpp
+    src/FieldBlob.cpp
+    src/FieldBool.cpp
+    src/FieldDateTime.cpp
+    src/FieldFixedDecimal.cpp
+    src/FieldSchema.cpp
+    src/FieldType.cpp
+    src/GlotKernel.cpp
+    src/Hash128.cpp
+    src/LzfWrapper.cpp
+    src/MiniXmlParser.cpp
+    src/Open_AlteryxYXDB.cpp
+    src/Record.cpp
+    src/RecordCopier.cpp
+    src/RecordInfo.cpp
+    src/SCType.cpp
+    src/SpookyV2.cpp
+    src/SRC_stringHelper_OpenAlteryx.cpp
+    src/StringToDouble.cpp
+    src/UnicodeCaseFoldingTable.cpp
+    src/UnicodeCompareNoCase.cpp
+    src/UTF16Traits.cpp
+)
 
-set_source_files_properties(${PROJECT_C_SOURCES} PROPERTIES LANGUAGE C)
+set(C_SOURCES
+    src/lzf_c.c
+    src/lzf_d.c
+    src/sqlite3.c
+)
 
-add_library(${PROJECT_NAME} SHARED ${PROJECT_HEADERS} ${PROJECT_SOURCES} ${PROJECT_C_SOURCES})
-target_compile_definitions(${PROJECT_NAME} PRIVATE
-	-DSRCLIB_REPLACEMENT
-	-DOPEN_ALTERYX_EXPORTS
-	-DUNICODE
-	-DNOMINMAX
-	)
-target_include_directories(${PROJECT_NAME} PRIVATE ${CMAKE_SOURCE_DIR}/include)
-target_precompile_headers(${PROJECT_NAME} PRIVATE "$<$<COMPILE_LANGUAGE:CXX>:${CMAKE_SOURCE_DIR}/include/stdafx.h>")
+set_source_files_properties(${C_SOURCES} PROPERTIES LANGUAGE C)
+set_source_files_properties(${C_SOURCES} PROPERTIES COMPILE_OPTIONS "-w")
 
-add_executable(${PROJECT_NAME}Test test/main.cpp)
-target_include_directories(${PROJECT_NAME}Test PRIVATE ${CMAKE_SOURCE_DIR}/include)
-target_compile_definitions(${PROJECT_NAME}Test PRIVATE -DUNICODE -DNOMINMAX)
-target_link_libraries(${PROJECT_NAME}Test PRIVATE ${PROJECT_NAME})
-if (UNIX)
-	target_link_libraries(${PROJECT_NAME}Test PRIVATE -ldl)
+# Vendored C++ files - suppress warnings
+set_source_files_properties(src/SpookyV2.cpp PROPERTIES COMPILE_OPTIONS "-w")
+
+add_library(openyxdb SHARED ${LIB_SOURCES} ${C_SOURCES})
+
+target_compile_definitions(openyxdb PRIVATE
+    SRCLIB_REPLACEMENT
+    OPEN_ALTERYX_EXPORTS
+    UNICODE
+    NOMINMAX
+)
+
+target_include_directories(openyxdb
+    PUBLIC
+        $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/include>
+        $<INSTALL_INTERFACE:include>
+    PRIVATE
+        ${CMAKE_SOURCE_DIR}/include
+)
+
+if(MSVC)
+    target_compile_options(openyxdb PRIVATE
+        /W4 /WX
+        /wd4127 /wd4245 /wd4251 /wd4275 /wd4267 /wd4244
+        -EHa -J -MP
+    )
+    target_compile_options(openyxdb PRIVATE
+        $<$<CONFIG:Debug>:/Od /RTC1>
+        $<$<CONFIG:Release>:/Ob2 /Oi /Zi>
+    )
+else()
+    target_compile_options(openyxdb PRIVATE
+        -Wall -Wextra -pedantic
+        -Wno-unknown-pragmas
+        -Wno-parentheses
+        -funsigned-char
+        $<$<CONFIG:Debug>:-O0 -g>
+        $<$<CONFIG:Release>:-O2>
+    )
+    target_link_libraries(openyxdb PRIVATE pthread dl)
+endif()
+
+target_precompile_headers(openyxdb PRIVATE
+    "$<$<COMPILE_LANGUAGE:CXX>:${CMAKE_SOURCE_DIR}/include/stdafx.h>"
+)
+
+# --- Tests ---
+
+option(OPENYXDB_BUILD_TESTS "Build tests" ON)
+
+if(OPENYXDB_BUILD_TESTS)
+    enable_testing()
+
+    # Legacy example test
+    add_executable(openyxdb_example test/main.cpp)
+    target_include_directories(openyxdb_example PRIVATE ${CMAKE_SOURCE_DIR}/include)
+    target_compile_definitions(openyxdb_example PRIVATE UNICODE NOMINMAX)
+    target_link_libraries(openyxdb_example PRIVATE openyxdb)
+
+    add_test(NAME example_roundtrip COMMAND openyxdb_example)
+
+    # Catch2 tests
+    find_package(Catch2 3 QUIET)
+    if(Catch2_FOUND)
+        file(GLOB TEST_SOURCES test/test_*.cpp)
+        if(TEST_SOURCES)
+            add_executable(openyxdb_tests ${TEST_SOURCES})
+            target_include_directories(openyxdb_tests PRIVATE ${CMAKE_SOURCE_DIR}/include)
+            target_compile_definitions(openyxdb_tests PRIVATE UNICODE NOMINMAX)
+            target_link_libraries(openyxdb_tests PRIVATE openyxdb Catch2::Catch2WithMain)
+
+            include(Catch2::Catch)
+            catch_discover_tests(openyxdb_tests)
+        endif()
+    endif()
 endif()
