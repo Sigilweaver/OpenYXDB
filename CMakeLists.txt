@@ -113,7 +113,7 @@ if(OPENYXDB_BUILD_TESTS)
             target_compile_definitions(openyxdb_tests PRIVATE UNICODE NOMINMAX)
             target_link_libraries(openyxdb_tests PRIVATE openyxdb Catch2::Catch2WithMain)
 
-            include(Catch2::Catch)
+            include(Catch)
             catch_discover_tests(openyxdb_tests)
         endif()
     endif()
