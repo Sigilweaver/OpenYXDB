@@ -13,6 +13,7 @@ __pycache__/
 dist/
 *.so
 *.dylib
+.pytest_cache/
 
 # IDE
 .vscode/
