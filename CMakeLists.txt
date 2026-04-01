@@ -118,3 +118,26 @@ if(OPENYXDB_BUILD_TESTS)
         endif()
     endif()
 endif()
+
+# --- Python bindings ---
+
+option(OPENYXDB_BUILD_PYTHON "Build Python bindings" ON)
+
+if(OPENYXDB_BUILD_PYTHON)
+    find_package(Python COMPONENTS Interpreter Development.Module QUIET)
+    if(Python_FOUND)
+        execute_process(
+            COMMAND "${Python_EXECUTABLE}" -m nanobind --cmake_dir
+            OUTPUT_STRIP_TRAILING_WHITESPACE OUTPUT_VARIABLE NB_DIR)
+        list(APPEND CMAKE_PREFIX_PATH "${NB_DIR}")
+        find_package(nanobind CONFIG QUIET)
+        if(nanobind_FOUND)
+            nanobind_add_module(_openyxdb python/_openyxdb.cpp)
+            target_link_libraries(_openyxdb PRIVATE openyxdb)
+            target_include_directories(_openyxdb PRIVATE ${CMAKE_SOURCE_DIR}/include)
+            target_compile_definitions(_openyxdb PRIVATE SRCLIB_REPLACEMENT UNICODE NOMINMAX)
+
+            install(TARGETS _openyxdb LIBRARY DESTINATION .)
+        endif()
+    endif()
+endif()
