@@ -1,6 +1,6 @@
 #pragma once
 
-#ifdef __linux__
+#if defined(__linux__) || defined(__APPLE__)
 	#define _stdcall
 	#define __stdcall
 	#define _int64 int64_t
@@ -11,6 +11,6 @@
 	#define WINAPI
 using DWORD = unsigned int;
 using LPVOID = void*;
-using LONG = long;  // what a super typedef. "increment i"
+using LONG = long;
 using HANDLE = void*;
 #endif

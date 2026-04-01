@@ -9,7 +9,7 @@
 
 	// this is built within AlteryxSDKBuilder with a different definition of various
 	// things, like string. That must be defined before regular headers are included.
-	#if defined(__linux__) || defined(BUILDING_SDK) || defined(BUILDING_OPEN_ALTERYX)
+	#if defined(__linux__) || defined(__APPLE__) || defined(BUILDING_SDK) || defined(BUILDING_OPEN_ALTERYX)
 		#define MINIXML_EXPORT
 	#elif defined(BASE_EXPORTS) || defined(BUILDING_E2LIB) || defined(OPEN_ALTERYX_EXPORTS)
 		#define MINIXML_EXPORT __declspec(dllexport)

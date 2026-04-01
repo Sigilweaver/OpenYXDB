@@ -16,7 +16,7 @@
 #include "Base/lzf_src.h"
 #include "RecordLib/RecordInfo.h"
 
-#if defined(__linux__) || defined(BUILDING_OPEN_ALTERYX)
+#if defined(__linux__) || defined(__APPLE__) || defined(BUILDING_OPEN_ALTERYX)
 	#define OPEN_ALTERYX_EXPORT
 #elif defined(OPEN_ALTERYX_EXPORTS)
 	#define OPEN_ALTERYX_EXPORT __declspec(dllexport)
