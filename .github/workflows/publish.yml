@@ -42,6 +42,8 @@ jobs:
             runner: warp-macos-15-arm64-6x
           - os: macos-arm64
             runner: warp-macos-15-arm64-6x
+          - os: windows-x64
+            runner: warp-windows-2022-x64-4x
     steps:
       - uses: actions/checkout@v4
 
@@ -55,7 +57,8 @@ jobs:
           CIBW_BUILD: "cp39-* cp310-* cp311-* cp312-* cp313-*"
           CIBW_SKIP: "*-musllinux_* *-win32 *i686"
           CIBW_ARCHS_LINUX: ${{ matrix.os == 'linux-x64' && 'x86_64' || '' }}
-          CIBW_ARCHS_MACOS: ${{ matrix.os == 'macos-arm64' && 'arm64' || matrix.os == 'macos-x64' && 'x86_64' || 'arm64' }}
+          CIBW_ARCHS_MACOS: ${{ matrix.os == 'macos-arm64' && 'arm64' || matrix.os == 'macos-x64' && 'x86_64' || '' }}
+          CIBW_ARCHS_WINDOWS: ${{ matrix.os == 'windows-x64' && 'AMD64' || '' }}
           CIBW_BUILD_VERBOSITY: 1
           CIBW_TEST_REQUIRES: pytest pyarrow pandas polars
           CIBW_TEST_COMMAND: pytest {project}/tests -v

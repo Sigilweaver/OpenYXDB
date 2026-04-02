@@ -1,7 +1,7 @@
 [workspace]
 name = "openyxdb"
 channels = ["conda-forge"]
-platforms = ["linux-64", "osx-64", "osx-arm64"]
+platforms = ["linux-64", "osx-64", "osx-arm64", "win-64"]
 version = "0.1.0"
 
 [dependencies]
@@ -20,7 +20,7 @@ pytest = ">=7.0"
 [tasks]
 configure = "cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=$CONDA_PREFIX"
 configure-debug = "cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DCMAKE_INSTALL_PREFIX=$CONDA_PREFIX"
-build = { cmd = "cmake --build build && ln -sf $(pwd)/build/_openyxdb*.so python/openyxdb/ 2>/dev/null; ln -sf $(pwd)/build/libopenyxdb.so python/openyxdb/ 2>/dev/null; true", depends-on = [
+build = { cmd = "cmake --build build && cp build/_openyxdb* python/openyxdb/ 2>/dev/null; cp build/libopenyxdb* python/openyxdb/ 2>/dev/null; cp build/openyxdb.dll python/openyxdb/ 2>/dev/null; true", depends-on = [
     "configure",
 ] }
 test = { cmd = "ctest --test-dir build --output-on-failure", depends-on = [
