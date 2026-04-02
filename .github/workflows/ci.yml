@@ -21,7 +21,7 @@ jobs:
           - os: linux-x64
             runner: warp-ubuntu-2404-x64-4x
           - os: macos-arm64
-            runner: warp-macos-15-arm64-4x
+            runner: warp-macos-15-arm64-6x
     steps:
       - uses: actions/checkout@v4
 
@@ -47,7 +47,7 @@ jobs:
             runner: warp-ubuntu-2404-x64-4x
             python: "3.12"
           - os: macos-arm64
-            runner: warp-macos-15-arm64-4x
+            runner: warp-macos-15-arm64-6x
             python: "3.12"
     steps:
       - uses: actions/checkout@v4
