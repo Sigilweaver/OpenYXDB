@@ -4,16 +4,16 @@ build-backend = "scikit_build_core.build"
 
 [project]
 name = "openyxdb"
-version = "0.1.0"
+version = "1.0.0"
 description = "Read and write Alteryx YXDB files"
 readme = "README.md"
-license = {text = "MIT"}
+license = { text = "GPL-3.0-only" }
 requires-python = ">=3.9"
 classifiers = [
-    "Development Status :: 4 - Beta",
+    "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Developers",
     "Intended Audience :: Science/Research",
-    "License :: OSI Approved :: MIT License",
+    "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
     "Programming Language :: C++",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.9",
