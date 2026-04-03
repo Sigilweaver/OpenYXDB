@@ -124,21 +124,31 @@ endif()
 option(OPENYXDB_BUILD_PYTHON "Build Python bindings" ON)
 
 if(OPENYXDB_BUILD_PYTHON)
-    find_package(Python COMPONENTS Interpreter Development.Module QUIET)
-    if(Python_FOUND)
-        execute_process(
-            COMMAND "${Python_EXECUTABLE}" -m nanobind --cmake_dir
-            OUTPUT_STRIP_TRAILING_WHITESPACE OUTPUT_VARIABLE NB_DIR)
-        list(APPEND CMAKE_PREFIX_PATH "${NB_DIR}")
-        find_package(nanobind CONFIG QUIET)
-        if(nanobind_FOUND)
-            nanobind_add_module(_openyxdb python/_openyxdb.cpp)
-            target_link_libraries(_openyxdb PRIVATE openyxdb)
-            target_include_directories(_openyxdb PRIVATE ${CMAKE_SOURCE_DIR}/include)
-            target_compile_definitions(_openyxdb PRIVATE SRCLIB_REPLACEMENT UNICODE NOMINMAX)
+    find_package(Python COMPONENTS Interpreter Development.Module REQUIRED)
+    execute_process(
+        COMMAND "${Python_EXECUTABLE}" -m nanobind --cmake_dir
+        OUTPUT_STRIP_TRAILING_WHITESPACE OUTPUT_VARIABLE NB_DIR)
+    list(APPEND CMAKE_PREFIX_PATH "${NB_DIR}")
+    find_package(nanobind CONFIG REQUIRED)
 
-            install(TARGETS _openyxdb LIBRARY DESTINATION openyxdb)
-            install(TARGETS openyxdb LIBRARY DESTINATION openyxdb)
-        endif()
+    nanobind_add_module(_openyxdb python/_openyxdb.cpp)
+    target_link_libraries(_openyxdb PRIVATE openyxdb)
+    target_include_directories(_openyxdb PRIVATE ${CMAKE_SOURCE_DIR}/include)
+    target_compile_definitions(_openyxdb PRIVATE SRCLIB_REPLACEMENT UNICODE NOMINMAX)
+
+    # Output the Python module directly into the package directory
+    set_target_properties(_openyxdb PROPERTIES
+        LIBRARY_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/python/openyxdb"
+    )
+
+    # Ensure the module can find libopenyxdb.so next to it at runtime
+    if(NOT MSVC)
+        set_target_properties(_openyxdb PROPERTIES
+            INSTALL_RPATH "$ORIGIN"
+            BUILD_RPATH "$ORIGIN;${CMAKE_BINARY_DIR}"
+        )
     endif()
+
+    install(TARGETS _openyxdb LIBRARY DESTINATION openyxdb)
+    install(TARGETS openyxdb LIBRARY DESTINATION openyxdb)
 endif()
