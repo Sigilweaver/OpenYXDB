@@ -45,7 +45,13 @@ set_source_files_properties(${C_SOURCES} PROPERTIES COMPILE_OPTIONS "-w")
 # Vendored C++ files - suppress warnings
 set_source_files_properties(src/SpookyV2.cpp PROPERTIES COMPILE_OPTIONS "-w")
 
-add_library(openyxdb SHARED ${LIB_SOURCES} ${C_SOURCES})
+option(OPENYXDB_BUILD_PYTHON "Build Python bindings" ON)
+
+if(OPENYXDB_BUILD_PYTHON)
+    add_library(openyxdb STATIC ${LIB_SOURCES} ${C_SOURCES})
+else()
+    add_library(openyxdb SHARED ${LIB_SOURCES} ${C_SOURCES})
+endif()
 
 target_compile_definitions(openyxdb PRIVATE
     SRCLIB_REPLACEMENT
@@ -121,8 +127,6 @@ endif()
 
 # --- Python bindings ---
 
-option(OPENYXDB_BUILD_PYTHON "Build Python bindings" ON)
-
 if(OPENYXDB_BUILD_PYTHON)
     find_package(Python COMPONENTS Interpreter Development.Module REQUIRED)
     execute_process(
@@ -141,14 +145,5 @@ if(OPENYXDB_BUILD_PYTHON)
         LIBRARY_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/python/openyxdb"
     )
 
-    # Ensure the module can find libopenyxdb.so next to it at runtime
-    if(NOT MSVC)
-        set_target_properties(_openyxdb PROPERTIES
-            INSTALL_RPATH "$ORIGIN"
-            BUILD_RPATH "$ORIGIN;${CMAKE_BINARY_DIR}"
-        )
-    endif()
-
     install(TARGETS _openyxdb LIBRARY DESTINATION openyxdb)
-    install(TARGETS openyxdb LIBRARY DESTINATION openyxdb)
 endif()
