@@ -8,7 +8,7 @@ version = "1.0.0"
 description = "Read and write Alteryx YXDB files"
 readme = "README.md"
 license = { text = "GPL-3.0-only" }
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 classifiers = [
     "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Developers",
@@ -16,7 +16,6 @@ classifiers = [
     "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
     "Programming Language :: C++",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
@@ -24,6 +23,11 @@ classifiers = [
     "Topic :: Scientific/Engineering",
 ]
 dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/Sigilweaver/OpenYXDB"
+Source = "https://github.com/Sigilweaver/OpenYXDB"
+Issues = "https://github.com/Sigilweaver/OpenYXDB/issues"
 
 [project.optional-dependencies]
 arrow = ["pyarrow>=14.0"]

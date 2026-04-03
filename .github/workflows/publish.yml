@@ -51,16 +51,20 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
       - name: Build wheels
         uses: pypa/cibuildwheel@v2.22
         env:
-          CIBW_BUILD: "cp39-* cp310-* cp311-* cp312-* cp313-*"
+          CIBW_BUILD: "cp310-* cp311-* cp312-* cp313-*"
           CIBW_SKIP: "*-musllinux_* *-win32 *i686"
           CIBW_ARCHS_LINUX: ${{ matrix.os == 'linux-x64' && 'x86_64' || '' }}
           CIBW_ARCHS_MACOS: ${{ matrix.os == 'macos-arm64' && 'arm64' || matrix.os == 'macos-x64' && 'x86_64' || '' }}
           CIBW_ARCHS_WINDOWS: ${{ matrix.os == 'windows-x64' && 'AMD64' || '' }}
+          CIBW_BUILD_FRONTEND: "build[uv]"
           CIBW_BUILD_VERBOSITY: 1
-          CIBW_TEST_REQUIRES: pytest pyarrow pandas polars
+          CIBW_TEST_EXTRAS: test
           CIBW_TEST_COMMAND: pytest {project}/tests -v
           CIBW_ENVIRONMENT: CMAKE_BUILD_PARALLEL_LEVEL=4
 
