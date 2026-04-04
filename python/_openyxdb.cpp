@@ -253,8 +253,9 @@ public:
     // Read all records as a list of dicts (column-name -> value)
     nb::list read_records() {
         nb::list rows;
-        m_db.GoRecord(0);
         int64_t n = m_db.GetNumRecords();
+        if (n == 0) return rows;
+        m_db.GoRecord(0);
         for (int64_t i = 0; i < n; ++i) {
             const RecordData* rec = m_db.ReadRecord();
             if (!rec) break;
@@ -275,7 +276,8 @@ public:
         // Pre-allocate column lists
         std::vector<nb::list> columns(nFields);
 
-        m_db.GoRecord(0);
+        if (n > 0)
+            m_db.GoRecord(0);
         for (int64_t i = 0; i < n; ++i) {
             const RecordData* rec = m_db.ReadRecord();
             if (!rec) break;
