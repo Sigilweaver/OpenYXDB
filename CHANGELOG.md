@@ -15,6 +15,9 @@ All notable changes to this project will be documented in this file.
 ### Changed
 - Added `License` URL to `[project.urls]` in pyproject.toml for proper PyPI sidebar display
 
+### Tested
+- Verified all fixes by reading 1,012 real-world E1 YXDB files sourced from [YXDB-Sources](https://github.com/Sigilweaver/YXDB-Sources) — 100% pass rate (up from 90% on v1.0.1)
+
 ---
 
 ## [1.0.1] - 2026-04-04
