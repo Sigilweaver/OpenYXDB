@@ -429,6 +429,16 @@ private:
 NB_MODULE(_openyxdb, m) {
     m.doc() = "Low-level Python bindings for OpenYXDB";
 
+    // Register the C++ Error exception so it translates to Python RuntimeError
+    nb::register_exception_translator([](const std::exception_ptr& p, void*) {
+        try {
+            std::rethrow_exception(p);
+        } catch (const SRC::Error& e) {
+            std::string msg = wstring_to_utf8(e.GetErrorDescription());
+            PyErr_SetString(PyExc_RuntimeError, msg.c_str());
+        }
+    });
+
     nb::class_<FieldInfo>(m, "FieldInfo")
         .def(nb::init<>())
         .def_rw("name", &FieldInfo::name)
