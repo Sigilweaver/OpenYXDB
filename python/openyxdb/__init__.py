@@ -25,6 +25,7 @@ __all__ = [
     "from_pyarrow",
     "from_pandas",
     "from_polars",
+    "register_polars",
 ]
 
 # --------------------------------------------------------------------------- #
@@ -364,3 +365,59 @@ def from_polars(df, path: str | os.PathLike) -> None:
     """Write a Polars DataFrame to a YXDB file."""
     table = df.to_arrow()
     from_pyarrow(table, path)
+
+
+# --------------------------------------------------------------------------- #
+# Polars namespace plugins + monkey-patching
+# --------------------------------------------------------------------------- #
+
+def _read_yxdb_polars(path: str | os.PathLike) -> "pl.DataFrame":
+    """Read a YXDB file into a Polars DataFrame. Alias for ``openyxdb.to_polars``."""
+    return to_polars(path)
+
+
+def register_polars() -> None:
+    """Register Polars namespace plugins and top-level convenience aliases.
+
+    After calling this (or after ``import openyxdb``):
+
+    - ``pl.read_yxdb(path)`` — eager read, returns DataFrame
+    - ``pl.scan_yxdb(path)`` — lazy scan, returns LazyFrame
+    - ``df.yxdb.write(path)`` — write a DataFrame to YXDB
+    - ``lf.yxdb.sink(path)`` — collect a LazyFrame and write to YXDB
+    """
+    try:
+        import polars as pl
+    except ImportError:
+        return
+
+    # -- Namespace plugins -------------------------------------------------- #
+    if not hasattr(pl.DataFrame, "yxdb"):
+        @pl.api.register_dataframe_namespace("yxdb")
+        class YxdbDataFrameNamespace:
+            def __init__(self, df: pl.DataFrame):
+                self._df = df
+
+            def write(self, path: str | os.PathLike) -> None:
+                """Write this DataFrame to a YXDB file."""
+                from_polars(self._df, path)
+
+    if not hasattr(pl.LazyFrame, "yxdb"):
+        @pl.api.register_lazyframe_namespace("yxdb")
+        class YxdbLazyFrameNamespace:
+            def __init__(self, lf: pl.LazyFrame):
+                self._lf = lf
+
+            def sink(self, path: str | os.PathLike) -> None:
+                """Collect this LazyFrame and write the result to a YXDB file."""
+                from_polars(self._lf.collect(), path)
+
+    # -- Top-level monkey patches ------------------------------------------- #
+    if not hasattr(pl, "read_yxdb"):
+        pl.read_yxdb = _read_yxdb_polars
+    if not hasattr(pl, "scan_yxdb"):
+        pl.scan_yxdb = scan_yxdb
+
+
+# Auto-register on import (no-op if polars not installed)
+register_polars()

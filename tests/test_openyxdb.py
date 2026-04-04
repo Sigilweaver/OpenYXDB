@@ -412,3 +412,44 @@ class TestScanYxdb:
 
         lf = openyxdb.scan_yxdb(tmp_yxdb)
         assert isinstance(lf, pl.LazyFrame)
+
+
+# --------------------------------------------------------------------------- #
+# Polars namespace & monkey-patch tests
+# --------------------------------------------------------------------------- #
+
+class TestPolarsPlugin:
+    def test_pl_read_yxdb(self, tmp_yxdb):
+        import polars as pl
+
+        openyxdb.from_polars(pl.DataFrame({"a": [1, 2, 3]}), tmp_yxdb)
+        result = pl.read_yxdb(tmp_yxdb)
+        assert isinstance(result, pl.DataFrame)
+        assert result["a"].to_list() == [1, 2, 3]
+
+    def test_pl_scan_yxdb(self, tmp_yxdb):
+        import polars as pl
+
+        openyxdb.from_polars(pl.DataFrame({"x": [10, 20]}), tmp_yxdb)
+        lf = pl.scan_yxdb(tmp_yxdb)
+        assert isinstance(lf, pl.LazyFrame)
+        assert lf.collect()["x"].to_list() == [10, 20]
+
+    def test_df_yxdb_write(self, tmp_yxdb):
+        import polars as pl
+
+        df = pl.DataFrame({"a": [1, 2], "b": ["x", "y"]})
+        df.yxdb.write(tmp_yxdb)
+
+        result = openyxdb.to_polars(tmp_yxdb)
+        assert result["a"].to_list() == [1, 2]
+        assert result["b"].to_list() == ["x", "y"]
+
+    def test_lf_yxdb_sink(self, tmp_yxdb):
+        import polars as pl
+
+        lf = pl.DataFrame({"n": [10, 20, 30]}).lazy().filter(pl.col("n") > 15)
+        lf.yxdb.sink(tmp_yxdb)
+
+        result = openyxdb.to_polars(tmp_yxdb)
+        assert result["n"].to_list() == [20, 30]
