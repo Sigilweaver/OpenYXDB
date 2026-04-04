@@ -30,9 +30,9 @@ pip install openyxdb
 import openyxdb
 
 # Read to PyArrow, Pandas, or Polars
-table = openyxdb.read_arrow("data.yxdb")
-df = openyxdb.read_pandas("data.yxdb")
-df = openyxdb.read_polars("data.yxdb")
+table = openyxdb.to_pyarrow("data.yxdb")
+df = openyxdb.to_pandas("data.yxdb")
+df = openyxdb.to_polars("data.yxdb")
 
 # Write from any of them
 openyxdb.from_polars(df, "output.yxdb")
@@ -56,7 +56,11 @@ pixi run test
 - Spatial objects are accessible only as raw blobs (SHP-encoded binary).
 - Little-endian architectures only (x86, ARM).
 
+## Testing
+
+The reader has been validated against **1,012 real-world E1 YXDB files** sourced from the community corpus at [Sigilweaver/YXDB-Sources](https://github.com/Sigilweaver/YXDB-Sources), covering a wide range of field types, encodings, record counts (0 to 200k+), and filenames including non-ASCII characters — **100% pass rate**.
+
 ## License
 
-GPLv3 -- see [LICENSE](LICENSE).
+GPLv3 -- see [LICENSE](https://github.com/Sigilweaver/OpenYXDB/blob/main/LICENSE).
 

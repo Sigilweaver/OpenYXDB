@@ -20,14 +20,34 @@ static std::string u16_to_utf8(const U16unit* s, size_t len) {
     std::string result;
     result.reserve(len);
     for (size_t i = 0; i < len; ++i) {
-        uint16_t c = static_cast<uint16_t>(s[i]);
+        uint32_t c = static_cast<uint16_t>(s[i]);
+        // Handle UTF-16 surrogate pairs
+        if (c >= 0xD800 && c <= 0xDBFF && i + 1 < len) {
+            uint16_t trail = static_cast<uint16_t>(s[i + 1]);
+            if (trail >= 0xDC00 && trail <= 0xDFFF) {
+                c = 0x10000 + ((c - 0xD800) << 10) + (trail - 0xDC00);
+                ++i; // consume trail surrogate
+            }
+        }
         if (c < 0x80) {
             result.push_back(static_cast<char>(c));
         } else if (c < 0x800) {
             result.push_back(static_cast<char>(0xC0 | (c >> 6)));
             result.push_back(static_cast<char>(0x80 | (c & 0x3F)));
+        } else if (c < 0x10000) {
+            // Lone surrogates -> U+FFFD replacement character
+            if (c >= 0xD800 && c <= 0xDFFF) {
+                result.push_back(static_cast<char>(0xEF));
+                result.push_back(static_cast<char>(0xBF));
+                result.push_back(static_cast<char>(0xBD));
+            } else {
+                result.push_back(static_cast<char>(0xE0 | (c >> 12)));
+                result.push_back(static_cast<char>(0x80 | ((c >> 6) & 0x3F)));
+                result.push_back(static_cast<char>(0x80 | (c & 0x3F)));
+            }
         } else {
-            result.push_back(static_cast<char>(0xE0 | (c >> 12)));
+            result.push_back(static_cast<char>(0xF0 | (c >> 18)));
+            result.push_back(static_cast<char>(0x80 | ((c >> 12) & 0x3F)));
             result.push_back(static_cast<char>(0x80 | ((c >> 6) & 0x3F)));
             result.push_back(static_cast<char>(0x80 | (c & 0x3F)));
         }
@@ -126,6 +146,18 @@ static E_FieldType field_type_from_name(const std::string& name) {
     throw std::invalid_argument("Unknown field type: " + name);
 }
 
+// Convert narrow string bytes to a Python str.
+// Tries UTF-8 first; falls back to Latin-1 (which never fails) since YXDB
+// narrow string fields (String/V_String) use the system codepage encoding
+// from Windows (typically Windows-1252, a superset of Latin-1).
+static nb::object narrow_to_python_str(const char* data, size_t len) {
+    PyObject* obj = PyUnicode_DecodeUTF8(data, static_cast<Py_ssize_t>(len), "strict");
+    if (obj) return nb::steal<nb::object>(obj);
+    PyErr_Clear();
+    return nb::steal<nb::object>(
+        PyUnicode_DecodeLatin1(data, static_cast<Py_ssize_t>(len), nullptr));
+}
+
 // Extract a field value as a Python object
 static nb::object field_to_python(const FieldBase* field, const RecordData* rec) {
     if (field->GetNull(rec))
@@ -152,13 +184,16 @@ static nb::object field_to_python(const FieldBase* field, const RecordData* rec)
             auto val = field->GetAsDouble(rec);
             return nb::cast(val.value);
         }
-        case E_FT_String:
-        case E_FT_V_String:
         case E_FT_Date:
         case E_FT_Time:
         case E_FT_DateTime: {
             auto val = field->GetAsAString(rec);
             return nb::cast(std::string(val.value.pValue, val.value.nLength));
+        }
+        case E_FT_String:
+        case E_FT_V_String: {
+            auto val = field->GetAsAString(rec);
+            return narrow_to_python_str(val.value.pValue, val.value.nLength);
         }
         case E_FT_WString:
         case E_FT_V_WString: {
@@ -218,8 +253,9 @@ public:
     // Read all records as a list of dicts (column-name -> value)
     nb::list read_records() {
         nb::list rows;
-        m_db.GoRecord(0);
         int64_t n = m_db.GetNumRecords();
+        if (n == 0) return rows;
+        m_db.GoRecord(0);
         for (int64_t i = 0; i < n; ++i) {
             const RecordData* rec = m_db.ReadRecord();
             if (!rec) break;
@@ -240,7 +276,8 @@ public:
         // Pre-allocate column lists
         std::vector<nb::list> columns(nFields);
 
-        m_db.GoRecord(0);
+        if (n > 0)
+            m_db.GoRecord(0);
         for (int64_t i = 0; i < n; ++i) {
             const RecordData* rec = m_db.ReadRecord();
             if (!rec) break;
@@ -428,6 +465,16 @@ private:
 
 NB_MODULE(_openyxdb, m) {
     m.doc() = "Low-level Python bindings for OpenYXDB";
+
+    // Register the C++ Error exception so it translates to Python RuntimeError
+    nb::register_exception_translator([](const std::exception_ptr& p, void*) {
+        try {
+            std::rethrow_exception(p);
+        } catch (const SRC::Error& e) {
+            std::string msg = wstring_to_utf8(e.GetErrorDescription());
+            PyErr_SetString(PyExc_RuntimeError, msg.c_str());
+        }
+    });
 
     nb::class_<FieldInfo>(m, "FieldInfo")
         .def(nb::init<>())
