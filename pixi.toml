@@ -12,6 +12,8 @@ c-compiler = ">=1.0"
 catch2 = ">=3.4"
 python = ">=3.10"
 nanobind = ">=2.0"
+scikit-build-core = ">=0.10"
+pip = ">=23.0"
 pyarrow = ">=14.0"
 pandas = ">=2.0"
 polars = ">=0.20"
@@ -20,11 +22,10 @@ pytest = ">=7.0"
 [tasks]
 configure = "cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=$CONDA_PREFIX"
 configure-debug = "cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DCMAKE_INSTALL_PREFIX=$CONDA_PREFIX"
-build = { cmd = "cmake --build build && cp --remove-destination build/libopenyxdb* python/openyxdb/ 2>/dev/null; cp build/openyxdb.dll python/openyxdb/ 2>/dev/null; true", depends-on = [
-    "configure",
-] }
+build = { cmd = "cmake --build build", depends-on = ["configure"] }
 test = { cmd = "ctest --test-dir build --output-on-failure", depends-on = [
     "build",
 ] }
-test-python = { cmd = "pytest tests/ -v", depends-on = ["build"] }
+install-python = "pip install --no-build-isolation -e ."
+test-python = { cmd = "pytest tests/ -v", depends-on = ["install-python"] }
 clean = "rm -rf build"
