@@ -4,7 +4,7 @@ build-backend = "scikit_build_core.build"
 
 [project]
 name = "openyxdb"
-version = "1.0.1"
+version = "1.0.2"
 description = "Read and write Alteryx YXDB files"
 readme = "README.md"
 license = { text = "GPL-3.0-only" }
@@ -28,6 +28,7 @@ dependencies = []
 Homepage = "https://github.com/Sigilweaver/OpenYXDB"
 Source = "https://github.com/Sigilweaver/OpenYXDB"
 Issues = "https://github.com/Sigilweaver/OpenYXDB/issues"
+License = "https://github.com/Sigilweaver/OpenYXDB/blob/main/LICENSE"
 
 [project.optional-dependencies]
 arrow = ["pyarrow>=14.0"]
