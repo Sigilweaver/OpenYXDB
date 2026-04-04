@@ -39,8 +39,5 @@ jobs:
           pixi-version: v0.41.4
           cache: true
 
-      - name: Build
-        run: pixi run build
-
       - name: Run Python tests
         run: pixi run test-python

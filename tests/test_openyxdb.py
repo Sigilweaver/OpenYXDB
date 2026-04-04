@@ -6,9 +6,6 @@ import tempfile
 
 import pytest
 
-# Add python dir to path (build .so is symlinked into python/openyxdb/)
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "python"))
-
 from openyxdb._openyxdb import FieldInfo, Reader, Writer
 from openyxdb import _openyxdb
 import openyxdb
