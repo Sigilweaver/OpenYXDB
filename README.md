@@ -56,6 +56,10 @@ pixi run test
 - Spatial objects are accessible only as raw blobs (SHP-encoded binary).
 - Little-endian architectures only (x86, ARM).
 
+## Testing
+
+The reader has been validated against **1,012 real-world E1 YXDB files** sourced from the community corpus at [Sigilweaver/YXDB-Sources](https://github.com/Sigilweaver/YXDB-Sources), covering a wide range of field types, encodings, record counts (0 to 200k+), and filenames including non-ASCII characters — **100% pass rate**.
+
 ## License
 
 GPLv3 -- see [LICENSE](https://github.com/Sigilweaver/OpenYXDB/blob/main/LICENSE).
