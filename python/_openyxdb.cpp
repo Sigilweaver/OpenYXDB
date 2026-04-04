@@ -146,6 +146,18 @@ static E_FieldType field_type_from_name(const std::string& name) {
     throw std::invalid_argument("Unknown field type: " + name);
 }
 
+// Convert narrow string bytes to a Python str.
+// Tries UTF-8 first; falls back to Latin-1 (which never fails) since YXDB
+// narrow string fields (String/V_String) use the system codepage encoding
+// from Windows (typically Windows-1252, a superset of Latin-1).
+static nb::object narrow_to_python_str(const char* data, size_t len) {
+    PyObject* obj = PyUnicode_DecodeUTF8(data, static_cast<Py_ssize_t>(len), "strict");
+    if (obj) return nb::steal<nb::object>(obj);
+    PyErr_Clear();
+    return nb::steal<nb::object>(
+        PyUnicode_DecodeLatin1(data, static_cast<Py_ssize_t>(len), nullptr));
+}
+
 // Extract a field value as a Python object
 static nb::object field_to_python(const FieldBase* field, const RecordData* rec) {
     if (field->GetNull(rec))
@@ -172,13 +184,16 @@ static nb::object field_to_python(const FieldBase* field, const RecordData* rec)
             auto val = field->GetAsDouble(rec);
             return nb::cast(val.value);
         }
-        case E_FT_String:
-        case E_FT_V_String:
         case E_FT_Date:
         case E_FT_Time:
         case E_FT_DateTime: {
             auto val = field->GetAsAString(rec);
             return nb::cast(std::string(val.value.pValue, val.value.nLength));
+        }
+        case E_FT_String:
+        case E_FT_V_String: {
+            auto val = field->GetAsAString(rec);
+            return narrow_to_python_str(val.value.pValue, val.value.nLength);
         }
         case E_FT_WString:
         case E_FT_V_WString: {
