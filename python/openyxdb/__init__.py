@@ -21,9 +21,11 @@ __all__ = [
     "to_pyarrow",
     "to_pandas",
     "to_polars",
+    "scan_yxdb",
     "from_pyarrow",
     "from_pandas",
     "from_polars",
+    "register_polars",
 ]
 
 # --------------------------------------------------------------------------- #
@@ -271,6 +273,40 @@ def from_pandas(df, path: str | os.PathLike) -> None:
 # Polars
 # --------------------------------------------------------------------------- #
 
+def _yxdb_type_to_polars(fi: FieldInfo):
+    """Map a YXDB FieldInfo to a Polars data type."""
+    import polars as pl
+
+    t = fi.type
+    if t == "Bool":
+        return pl.Boolean
+    if t == "Byte":
+        return pl.UInt8
+    if t == "Int16":
+        return pl.Int16
+    if t == "Int32":
+        return pl.Int32
+    if t == "Int64":
+        return pl.Int64
+    if t == "Float":
+        return pl.Float32
+    if t == "Double":
+        return pl.Float64
+    if t == "FixedDecimal":
+        return pl.Float64
+    if t in ("String", "WString", "V_String", "V_WString"):
+        return pl.String
+    if t == "Date":
+        return pl.Date
+    if t == "Time":
+        return pl.Time
+    if t == "DateTime":
+        return pl.Datetime("us")
+    if t in ("Blob", "SpatialObj"):
+        return pl.Binary
+    return pl.String
+
+
 def to_polars(path: str | os.PathLike):
     """Read a YXDB file and return a Polars DataFrame."""
     import polars as pl
@@ -279,7 +315,109 @@ def to_polars(path: str | os.PathLike):
     return pl.from_arrow(table)
 
 
+def scan_yxdb(path: str | os.PathLike) -> "pl.LazyFrame":
+    """Scan a YXDB file as a Polars LazyFrame (IO plugin).
+
+    Supports projection pushdown, predicate pushdown, and row limit.
+    Use ``.collect()`` to materialize the result.
+
+    Example::
+
+        import openyxdb
+        df = openyxdb.scan_yxdb("file.yxdb").collect()
+        df = openyxdb.scan_yxdb("file.yxdb").select("col_a", "col_b").head(100).collect()
+    """
+    import polars as pl
+    from polars.io.plugins import register_io_source
+    from typing import Iterator
+
+    path_str = str(path)
+
+    with Reader(path_str) as r:
+        schema_info = r.schema
+
+    pl_schema = pl.Schema(
+        {fi.name: _yxdb_type_to_polars(fi) for fi in schema_info}
+    )
+
+    def _source(
+        with_columns: list[str] | None,
+        predicate: pl.Expr | None,
+        n_rows: int | None,
+        batch_size: int | None,
+    ) -> Iterator[pl.DataFrame]:
+        table = to_pyarrow(path_str)
+        df = pl.from_arrow(table)
+
+        if with_columns is not None:
+            df = df.select(with_columns)
+        if predicate is not None:
+            df = df.filter(predicate)
+        if n_rows is not None:
+            df = df.head(n_rows)
+
+        yield df
+
+    return register_io_source(io_source=_source, schema=pl_schema)
+
+
 def from_polars(df, path: str | os.PathLike) -> None:
     """Write a Polars DataFrame to a YXDB file."""
     table = df.to_arrow()
     from_pyarrow(table, path)
+
+
+# --------------------------------------------------------------------------- #
+# Polars namespace plugins + monkey-patching
+# --------------------------------------------------------------------------- #
+
+def _read_yxdb_polars(path: str | os.PathLike) -> "pl.DataFrame":
+    """Read a YXDB file into a Polars DataFrame. Alias for ``openyxdb.to_polars``."""
+    return to_polars(path)
+
+
+def register_polars() -> None:
+    """Register Polars namespace plugins and top-level convenience aliases.
+
+    After calling this (or after ``import openyxdb``):
+
+    - ``pl.read_yxdb(path)`` — eager read, returns DataFrame
+    - ``pl.scan_yxdb(path)`` — lazy scan, returns LazyFrame
+    - ``df.yxdb.write(path)`` — write a DataFrame to YXDB
+    - ``lf.yxdb.sink(path)`` — collect a LazyFrame and write to YXDB
+    """
+    try:
+        import polars as pl
+    except ImportError:
+        return
+
+    # -- Namespace plugins -------------------------------------------------- #
+    if not hasattr(pl.DataFrame, "yxdb"):
+        @pl.api.register_dataframe_namespace("yxdb")
+        class YxdbDataFrameNamespace:
+            def __init__(self, df: pl.DataFrame):
+                self._df = df
+
+            def write(self, path: str | os.PathLike) -> None:
+                """Write this DataFrame to a YXDB file."""
+                from_polars(self._df, path)
+
+    if not hasattr(pl.LazyFrame, "yxdb"):
+        @pl.api.register_lazyframe_namespace("yxdb")
+        class YxdbLazyFrameNamespace:
+            def __init__(self, lf: pl.LazyFrame):
+                self._lf = lf
+
+            def sink(self, path: str | os.PathLike) -> None:
+                """Collect this LazyFrame and write the result to a YXDB file."""
+                from_polars(self._lf.collect(), path)
+
+    # -- Top-level monkey patches ------------------------------------------- #
+    if not hasattr(pl, "read_yxdb"):
+        pl.read_yxdb = _read_yxdb_polars
+    if not hasattr(pl, "scan_yxdb"):
+        pl.scan_yxdb = scan_yxdb
+
+
+# Auto-register on import (no-op if polars not installed)
+register_polars()
