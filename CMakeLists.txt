@@ -102,9 +102,13 @@ endif()
 
 target_link_libraries(openyxdb PRIVATE Threads::Threads ${CMAKE_DL_LIBS})
 
-target_precompile_headers(openyxdb PRIVATE
-    "$<$<COMPILE_LANGUAGE:CXX>:${CMAKE_SOURCE_DIR}/include/stdafx.h>"
-)
+# PCH is incompatible with universal2 fat-binary builds; only use it for
+# standalone (non-Python-wheel) builds where it speeds up compilation.
+if(NOT OPENYXDB_BUILD_PYTHON)
+    target_precompile_headers(openyxdb PRIVATE
+        "$<$<COMPILE_LANGUAGE:CXX>:${CMAKE_SOURCE_DIR}/include/stdafx.h>"
+    )
+endif()
 
 # --- Tests ---
 

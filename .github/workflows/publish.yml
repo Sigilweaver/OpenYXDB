@@ -38,9 +38,7 @@ jobs:
         include:
           - os: linux-x64
             runner: warp-ubuntu-2404-x64-4x
-          - os: macos-x64
-            runner: warp-macos-15-arm64-6x
-          - os: macos-arm64
+          - os: macos
             runner: warp-macos-15-arm64-6x
           - os: windows-x64
             runner: warp-windows-2022-x64-4x
@@ -60,7 +58,7 @@ jobs:
           CIBW_BUILD: "cp310-* cp311-* cp312-* cp313-*"
           CIBW_SKIP: "*-musllinux_* *-win32 *i686"
           CIBW_ARCHS_LINUX: ${{ matrix.os == 'linux-x64' && 'x86_64' || '' }}
-          CIBW_ARCHS_MACOS: ${{ matrix.os == 'macos-arm64' && 'arm64' || matrix.os == 'macos-x64' && 'x86_64' || '' }}
+          CIBW_ARCHS_MACOS: ${{ matrix.os == 'macos' && 'arm64 universal2' || '' }}
           CIBW_ARCHS_WINDOWS: ${{ matrix.os == 'windows-x64' && 'AMD64' || '' }}
           CIBW_BUILD_FRONTEND: "build[uv]"
           CIBW_BUILD_VERBOSITY: 1
