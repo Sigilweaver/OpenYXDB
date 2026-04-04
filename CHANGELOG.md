@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.0.2] - 2026-04-04
+
+### Fixed
+- **C++ exception translation** — registered the library's `Error` exception class with nanobind so C++ errors now produce a Python `RuntimeError` with the original message instead of a cryptic `SystemError: nanobind exception could not be translated`
+- **UTF-8 filename support on Linux** — replaced Latin-1 `ConvertToAString` path conversion with proper UTF-16 → UTF-8 conversion (`WStringToUtf8Path`), enabling files with non-ASCII names (accented characters, etc.) to be opened correctly; removed the artificial rejection of Unicode filenames
+- **UTF-16 surrogate pair handling** — `u16_to_utf8` now correctly decodes surrogate pairs (characters above U+FFFF) into 4-byte UTF-8, and replaces lone surrogates with U+FFFD instead of producing invalid UTF-8
+- **Non-UTF-8 narrow string fields** — added `narrow_to_python_str()` which tries UTF-8 first then falls back to Latin-1 for `String`/`V_String` fields, fixing `UnicodeDecodeError` on files with Windows-1252 encoded text (accented characters, currency symbols, etc.)
+- **Zero-record file crash** — `read_records()` and `read_columns()` no longer call `GoRecord(0)` on files with 0 records, which previously threw because `0 >= 0` triggered the bounds check
+- **PyPI license link** — changed relative `[LICENSE](LICENSE)` link in README to absolute GitHub URL so it resolves correctly on PyPI
+
+### Changed
+- Added `License` URL to `[project.urls]` in pyproject.toml for proper PyPI sidebar display
+
+### Tested
+- Verified all fixes by reading 1,012 real-world E1 YXDB files sourced from [YXDB-Sources](https://github.com/Sigilweaver/YXDB-Sources) — 100% pass rate (up from 90% on v1.0.1)
+
+---
+
 ## [1.0.1] - 2026-04-04
 
 ### Added

@@ -21,6 +21,44 @@
 
 namespace Alteryx { namespace OpenYXDB {
 
+#ifdef __GNUG__
+// Convert UTF-16 (WString) to UTF-8 for Linux filesystem paths.
+// ConvertToAString uses Latin-1 which breaks non-ASCII filenames on Linux
+// since the filesystem expects UTF-8.
+static AString WStringToUtf8Path(const WString& ws) {
+	AString result;
+	const U16unit* s = ws.c_str();
+	while (*s) {
+		uint32_t cp = static_cast<uint16_t>(*s);
+		// Handle surrogate pairs
+		if (cp >= 0xD800 && cp <= 0xDBFF) {
+			uint16_t trail = static_cast<uint16_t>(*(s + 1));
+			if (trail >= 0xDC00 && trail <= 0xDFFF) {
+				cp = 0x10000 + ((cp - 0xD800) << 10) + (trail - 0xDC00);
+				++s;
+			}
+		}
+		if (cp < 0x80) {
+			result.push_back(static_cast<char>(cp));
+		} else if (cp < 0x800) {
+			result.push_back(static_cast<char>(0xC0 | (cp >> 6)));
+			result.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+		} else if (cp < 0x10000) {
+			result.push_back(static_cast<char>(0xE0 | (cp >> 12)));
+			result.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
+			result.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+		} else {
+			result.push_back(static_cast<char>(0xF0 | (cp >> 18)));
+			result.push_back(static_cast<char>(0x80 | ((cp >> 12) & 0x3F)));
+			result.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
+			result.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+		}
+		++s;
+	}
+	return result;
+}
+#endif
+
 File_Large::File_Large()
 	: m_iFileDescriptor(-1)
 {
@@ -49,10 +87,7 @@ void File_Large::OpenForRead(WString strFile)
 	m_strFile = strFile;
 
 #ifdef __GNUG__
-	AString astrFile = ConvertToAString(strFile);
-	if (strchr(astrFile.c_str(), '?') != nullptr)
-		throw Error(U16("Error in OpenForRead: Unicode filenames are not supported"));
-
+	AString astrFile = WStringToUtf8Path(strFile);
 	m_iFileDescriptor = open(astrFile.c_str(), O_RDONLY | O_BINARY, 0);
 #else
 	m_iFileDescriptor = _wopen(strFile, _O_RDONLY | _O_BINARY);
@@ -68,10 +103,7 @@ void File_Large::OpenForWrite(WString strFile)
 	m_strFile = strFile;
 
 #ifdef __GNUG__
-	AString astrFile = ConvertToAString(strFile);
-	if (strchr(astrFile.c_str(), '?') != nullptr)
-		throw Error(U16("Error in OpenForRead: Unicode filenames are not supported"));
-
+	AString astrFile = WStringToUtf8Path(strFile);
 	m_iFileDescriptor = open(astrFile.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_BINARY, S_IRUSR | S_IWUSR);
 #else
 	m_iFileDescriptor = _wopen(strFile, _O_RDWR | _O_CREAT | _O_TRUNC | _O_BINARY, _S_IREAD | _S_IWRITE);
