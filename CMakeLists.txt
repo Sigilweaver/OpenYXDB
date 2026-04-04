@@ -45,14 +45,29 @@ set_source_files_properties(${C_SOURCES} PROPERTIES COMPILE_OPTIONS "-w")
 # Vendored C++ files - suppress warnings
 set_source_files_properties(src/SpookyV2.cpp PROPERTIES COMPILE_OPTIONS "-w")
 
-add_library(openyxdb SHARED ${LIB_SOURCES} ${C_SOURCES})
+option(OPENYXDB_BUILD_PYTHON "Build Python bindings" ON)
 
-target_compile_definitions(openyxdb PRIVATE
-    SRCLIB_REPLACEMENT
-    OPEN_ALTERYX_EXPORTS
-    UNICODE
-    NOMINMAX
-)
+if(OPENYXDB_BUILD_PYTHON)
+    add_library(openyxdb STATIC ${LIB_SOURCES} ${C_SOURCES})
+else()
+    add_library(openyxdb SHARED ${LIB_SOURCES} ${C_SOURCES})
+endif()
+
+if(OPENYXDB_BUILD_PYTHON)
+    target_compile_definitions(openyxdb PRIVATE
+        SRCLIB_REPLACEMENT
+        BUILDING_OPEN_ALTERYX
+        UNICODE
+        NOMINMAX
+    )
+else()
+    target_compile_definitions(openyxdb PRIVATE
+        SRCLIB_REPLACEMENT
+        OPEN_ALTERYX_EXPORTS
+        UNICODE
+        NOMINMAX
+    )
+endif()
 
 target_include_directories(openyxdb
     PUBLIC
@@ -62,11 +77,13 @@ target_include_directories(openyxdb
         ${CMAKE_SOURCE_DIR}/include
 )
 
+find_package(Threads REQUIRED)
+
 if(MSVC)
     target_compile_options(openyxdb PRIVATE
-        /W4 /WX
-        /wd4127 /wd4245 /wd4251 /wd4275 /wd4267 /wd4244
-        -EHa -J -MP
+        /W4
+        /wd4100 /wd4127 /wd4245 /wd4251 /wd4275 /wd4267 /wd4244
+        /EHa /J /MP
     )
     target_compile_options(openyxdb PRIVATE
         $<$<CONFIG:Debug>:/Od /RTC1>
@@ -81,12 +98,17 @@ else()
         $<$<CONFIG:Debug>:-O0 -g>
         $<$<CONFIG:Release>:-O2>
     )
-    target_link_libraries(openyxdb PRIVATE pthread dl)
 endif()
 
-target_precompile_headers(openyxdb PRIVATE
-    "$<$<COMPILE_LANGUAGE:CXX>:${CMAKE_SOURCE_DIR}/include/stdafx.h>"
-)
+target_link_libraries(openyxdb PRIVATE Threads::Threads ${CMAKE_DL_LIBS})
+
+# PCH is incompatible with universal2 fat-binary builds; only use it for
+# standalone (non-Python-wheel) builds where it speeds up compilation.
+if(NOT OPENYXDB_BUILD_PYTHON)
+    target_precompile_headers(openyxdb PRIVATE
+        "$<$<COMPILE_LANGUAGE:CXX>:${CMAKE_SOURCE_DIR}/include/stdafx.h>"
+    )
+endif()
 
 # --- Tests ---
 
@@ -121,8 +143,6 @@ endif()
 
 # --- Python bindings ---
 
-option(OPENYXDB_BUILD_PYTHON "Build Python bindings" ON)
-
 if(OPENYXDB_BUILD_PYTHON)
     find_package(Python COMPONENTS Interpreter Development.Module REQUIRED)
     execute_process(
@@ -134,21 +154,12 @@ if(OPENYXDB_BUILD_PYTHON)
     nanobind_add_module(_openyxdb python/_openyxdb.cpp)
     target_link_libraries(_openyxdb PRIVATE openyxdb)
     target_include_directories(_openyxdb PRIVATE ${CMAKE_SOURCE_DIR}/include)
-    target_compile_definitions(_openyxdb PRIVATE SRCLIB_REPLACEMENT UNICODE NOMINMAX)
+    target_compile_definitions(_openyxdb PRIVATE SRCLIB_REPLACEMENT BUILDING_OPEN_ALTERYX UNICODE NOMINMAX)
 
     # Output the Python module directly into the package directory
     set_target_properties(_openyxdb PROPERTIES
         LIBRARY_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/python/openyxdb"
     )
 
-    # Ensure the module can find libopenyxdb.so next to it at runtime
-    if(NOT MSVC)
-        set_target_properties(_openyxdb PROPERTIES
-            INSTALL_RPATH "$ORIGIN"
-            BUILD_RPATH "$ORIGIN;${CMAKE_BINARY_DIR}"
-        )
-    endif()
-
     install(TARGETS _openyxdb LIBRARY DESTINATION openyxdb)
-    install(TARGETS openyxdb LIBRARY DESTINATION openyxdb)
 endif()
