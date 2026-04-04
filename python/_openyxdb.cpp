@@ -20,14 +20,34 @@ static std::string u16_to_utf8(const U16unit* s, size_t len) {
     std::string result;
     result.reserve(len);
     for (size_t i = 0; i < len; ++i) {
-        uint16_t c = static_cast<uint16_t>(s[i]);
+        uint32_t c = static_cast<uint16_t>(s[i]);
+        // Handle UTF-16 surrogate pairs
+        if (c >= 0xD800 && c <= 0xDBFF && i + 1 < len) {
+            uint16_t trail = static_cast<uint16_t>(s[i + 1]);
+            if (trail >= 0xDC00 && trail <= 0xDFFF) {
+                c = 0x10000 + ((c - 0xD800) << 10) + (trail - 0xDC00);
+                ++i; // consume trail surrogate
+            }
+        }
         if (c < 0x80) {
             result.push_back(static_cast<char>(c));
         } else if (c < 0x800) {
             result.push_back(static_cast<char>(0xC0 | (c >> 6)));
             result.push_back(static_cast<char>(0x80 | (c & 0x3F)));
+        } else if (c < 0x10000) {
+            // Lone surrogates -> U+FFFD replacement character
+            if (c >= 0xD800 && c <= 0xDFFF) {
+                result.push_back(static_cast<char>(0xEF));
+                result.push_back(static_cast<char>(0xBF));
+                result.push_back(static_cast<char>(0xBD));
+            } else {
+                result.push_back(static_cast<char>(0xE0 | (c >> 12)));
+                result.push_back(static_cast<char>(0x80 | ((c >> 6) & 0x3F)));
+                result.push_back(static_cast<char>(0x80 | (c & 0x3F)));
+            }
         } else {
-            result.push_back(static_cast<char>(0xE0 | (c >> 12)));
+            result.push_back(static_cast<char>(0xF0 | (c >> 18)));
+            result.push_back(static_cast<char>(0x80 | ((c >> 12) & 0x3F)));
             result.push_back(static_cast<char>(0x80 | ((c >> 6) & 0x3F)));
             result.push_back(static_cast<char>(0x80 | (c & 0x3F)));
         }
