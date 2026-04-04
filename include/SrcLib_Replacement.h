@@ -16,7 +16,7 @@
 	#define SRCLIB_REPLACEMENT
 #endif
 
-#ifdef _WIN64
+#ifdef _WIN32
 	#include <Windows.h>
 #endif
 
@@ -62,7 +62,7 @@ class Tstr : public std::basic_string<T_Char, T_char_traits>
 {
 	inline static int DoCompareNoCase(const char* pA, const char* pB)
 	{
-#ifdef _WIN64
+#ifdef _WIN32
 		return _stricmp(pA, pB);
 #else
 		return strcasecmp(pA, pB);

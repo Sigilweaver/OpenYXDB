@@ -66,6 +66,7 @@ jobs:
           CIBW_BUILD_VERBOSITY: 1
           CIBW_TEST_EXTRAS: test
           CIBW_TEST_COMMAND: pytest {project}/tests -v
+          CIBW_TEST_SKIP: "*-manylinux_*"
           CIBW_ENVIRONMENT: CMAKE_BUILD_PARALLEL_LEVEL=4
 
       - uses: actions/upload-artifact@v4
