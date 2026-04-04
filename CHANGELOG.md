@@ -2,6 +2,27 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.0.1] - 2026-04-04
+
+### Added
+- **Polars IO plugin** — `openyxdb.scan_yxdb()` returns a lazy `pl.LazyFrame` via `register_io_source`, with projection pushdown, predicate pushdown, and row limit support
+- **Polars namespace plugins** — `df.yxdb.write(path)` and `lf.yxdb.sink(path)` via `@pl.api.register_dataframe_namespace` / `@pl.api.register_lazyframe_namespace`
+- **Top-level Polars aliases** — `pl.read_yxdb(path)` and `pl.scan_yxdb(path)` monkey-patched onto the polars module on `import openyxdb`
+- 9 new pytest tests covering scan, pushdown, namespace plugins, and monkey-patches (30 total)
+
+### Fixed
+- **Cross-platform wheel builds** — static library linking for Python wheels (fixes macOS delocate), `BUILDING_OPEN_ALTERYX` define to blank out `__declspec`, MSVC flag syntax, `_WIN32` guard corrections, `Threads::Threads` + `${CMAKE_DL_LIBS}` for portable linking
+- **Windows test crash** — removed `sys.path.insert` that caused pytest to import source tree instead of installed wheel
+- **Linux manylinux test skip** — `CIBW_TEST_SKIP` for manylinux containers where polars/pyarrow need glibc 2.28+
+- **macOS build** — disabled PCH for Python builds (incompatible with multi-arch), dropped universal2 in favor of arm64-only
+- **pixi dev workflow** — replaced fragile copy-so hack with `pip install -e .` editable install via scikit-build-core
+
+### Changed
+- Publish workflow no longer runs wheel builds on push to `main` — only on PRs (pre-merge check) and tags (publish to PyPI)
+- Added `cmake>=3.20` and `ninja` to `[build-system] requires`
+
+---
+
 ## [1.0.0] - 2026-04-03
 
 First production release, forked from the dormant Alteryx repository and rebuilt as a cross-platform C++/Python library.
