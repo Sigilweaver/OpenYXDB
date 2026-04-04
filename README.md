@@ -30,9 +30,9 @@ pip install openyxdb
 import openyxdb
 
 # Read to PyArrow, Pandas, or Polars
-table = openyxdb.read_arrow("data.yxdb")
-df = openyxdb.read_pandas("data.yxdb")
-df = openyxdb.read_polars("data.yxdb")
+table = openyxdb.to_pyarrow("data.yxdb")
+df = openyxdb.to_pandas("data.yxdb")
+df = openyxdb.to_polars("data.yxdb")
 
 # Write from any of them
 openyxdb.from_polars(df, "output.yxdb")
@@ -58,5 +58,5 @@ pixi run test
 
 ## License
 
-GPLv3 -- see [LICENSE](LICENSE).
+GPLv3 -- see [LICENSE](https://github.com/Sigilweaver/OpenYXDB/blob/main/LICENSE).
 
