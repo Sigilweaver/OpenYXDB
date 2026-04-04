@@ -21,6 +21,7 @@ __all__ = [
     "to_pyarrow",
     "to_pandas",
     "to_polars",
+    "scan_yxdb",
     "from_pyarrow",
     "from_pandas",
     "from_polars",
@@ -271,12 +272,92 @@ def from_pandas(df, path: str | os.PathLike) -> None:
 # Polars
 # --------------------------------------------------------------------------- #
 
+def _yxdb_type_to_polars(fi: FieldInfo):
+    """Map a YXDB FieldInfo to a Polars data type."""
+    import polars as pl
+
+    t = fi.type
+    if t == "Bool":
+        return pl.Boolean
+    if t == "Byte":
+        return pl.UInt8
+    if t == "Int16":
+        return pl.Int16
+    if t == "Int32":
+        return pl.Int32
+    if t == "Int64":
+        return pl.Int64
+    if t == "Float":
+        return pl.Float32
+    if t == "Double":
+        return pl.Float64
+    if t == "FixedDecimal":
+        return pl.Float64
+    if t in ("String", "WString", "V_String", "V_WString"):
+        return pl.String
+    if t == "Date":
+        return pl.Date
+    if t == "Time":
+        return pl.Time
+    if t == "DateTime":
+        return pl.Datetime("us")
+    if t in ("Blob", "SpatialObj"):
+        return pl.Binary
+    return pl.String
+
+
 def to_polars(path: str | os.PathLike):
     """Read a YXDB file and return a Polars DataFrame."""
     import polars as pl
 
     table = to_pyarrow(path)
     return pl.from_arrow(table)
+
+
+def scan_yxdb(path: str | os.PathLike) -> "pl.LazyFrame":
+    """Scan a YXDB file as a Polars LazyFrame (IO plugin).
+
+    Supports projection pushdown, predicate pushdown, and row limit.
+    Use ``.collect()`` to materialize the result.
+
+    Example::
+
+        import openyxdb
+        df = openyxdb.scan_yxdb("file.yxdb").collect()
+        df = openyxdb.scan_yxdb("file.yxdb").select("col_a", "col_b").head(100).collect()
+    """
+    import polars as pl
+    from polars.io.plugins import register_io_source
+    from typing import Iterator
+
+    path_str = str(path)
+
+    with Reader(path_str) as r:
+        schema_info = r.schema
+
+    pl_schema = pl.Schema(
+        {fi.name: _yxdb_type_to_polars(fi) for fi in schema_info}
+    )
+
+    def _source(
+        with_columns: list[str] | None,
+        predicate: pl.Expr | None,
+        n_rows: int | None,
+        batch_size: int | None,
+    ) -> Iterator[pl.DataFrame]:
+        table = to_pyarrow(path_str)
+        df = pl.from_arrow(table)
+
+        if with_columns is not None:
+            df = df.select(with_columns)
+        if predicate is not None:
+            df = df.filter(predicate)
+        if n_rows is not None:
+            df = df.head(n_rows)
+
+        yield df
+
+    return register_io_source(io_source=_source, schema=pl_schema)
 
 
 def from_polars(df, path: str | os.PathLike) -> None:
