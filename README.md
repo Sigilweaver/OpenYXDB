@@ -42,6 +42,42 @@ openyxdb.from_pyarrow(table, "output.yxdb")
 
 All 17 YXDB field types are supported: Bool, Byte, Int16, Int32, Int64, FixedDecimal, Float, Double, String, WString, V_String, V_WString, Date, Time, DateTime, Blob, and SpatialObj.
 
+## Polars integration
+
+Importing `openyxdb` automatically monkey-patches `polars` with YXDB support (no-op if polars is not installed). No extra setup is required.
+
+### Top-level aliases
+
+```python
+import polars as pl
+import openyxdb  # registers everything on import
+
+# Eager read — returns a DataFrame
+df = pl.read_yxdb("data.yxdb")
+
+# Lazy scan — returns a LazyFrame with projection & predicate pushdown
+lf = pl.scan_yxdb("data.yxdb")
+df = lf.select("col_a", "col_b").filter(pl.col("col_a") > 10).collect()
+```
+
+### Namespace plugins
+
+```python
+# Write a DataFrame directly
+df.yxdb.write("output.yxdb")
+
+# Collect a LazyFrame and write
+lf.yxdb.sink("output.yxdb")
+```
+
+### Manual registration
+
+If you import `openyxdb` after polars is already loaded, everything is registered automatically. To re-register or verify:
+
+```python
+openyxdb.register_polars()
+```
+
 ## Building from source
 
 ```bash
