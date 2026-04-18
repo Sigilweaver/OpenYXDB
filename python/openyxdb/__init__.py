@@ -317,6 +317,41 @@ def _yxdb_type_to_polars(fi: FieldInfo):
     return pl.String
 
 
+def _yxdb_columns_to_polars(
+    columns: dict[str, list[Any]],
+    schema_by_name: dict[str, FieldInfo],
+) -> "pl.DataFrame":
+    """Build a Polars DataFrame from a YXDB column dict using the YXDB schema.
+
+    Applies the same date/time string parsing as ``to_pyarrow`` so types match.
+    """
+    import datetime as _dt
+    import polars as pl
+
+    series: list[pl.Series] = []
+    for name, values in columns.items():
+        fi = schema_by_name[name]
+        t = fi.type
+        vals: list[Any] = list(values)
+        if t == "Date":
+            vals = [
+                _dt.date.fromisoformat(v) if v is not None else None
+                for v in vals
+            ]
+        elif t == "Time":
+            vals = [
+                _dt.time.fromisoformat(v) if v is not None else None
+                for v in vals
+            ]
+        elif t == "DateTime":
+            vals = [
+                _dt.datetime.fromisoformat(v) if v is not None else None
+                for v in vals
+            ]
+        series.append(pl.Series(name, vals, dtype=_yxdb_type_to_polars(fi)))
+    return pl.DataFrame(series)
+
+
 def to_polars(path: str | os.PathLike):
     """Read a YXDB file and return a Polars DataFrame."""
     import polars as pl
@@ -328,7 +363,18 @@ def to_polars(path: str | os.PathLike):
 def scan_yxdb(path: str | os.PathLike) -> "pl.LazyFrame":
     """Scan a YXDB file as a Polars LazyFrame (IO plugin).
 
-    Supports projection pushdown, predicate pushdown, and row limit.
+    Supports:
+
+    - **Projection pushdown** (``select``): only the requested columns are
+      decoded from the YXDB file.
+    - **Row-limit pushdown** (``head`` / ``fetch``): decoding stops once
+      ``n_rows`` records have been produced, so previewing the head of a
+      large file is near-free.
+    - **Predicate filtering**: applied per batch after decode. Because the
+      YXDB format has no per-block statistics, predicates cannot skip data
+      at the file level, but combined with ``head`` they short-circuit
+      once enough rows are collected.
+
     Use ``.collect()`` to materialize the result.
 
     Example::
@@ -344,29 +390,60 @@ def scan_yxdb(path: str | os.PathLike) -> "pl.LazyFrame":
     path_str = str(path)
 
     with Reader(path_str) as r:
-        schema_info = r.schema
+        schema_info = list(r.schema)
+        total_rows = r.num_records
 
+    schema_by_name = {fi.name: fi for fi in schema_info}
     pl_schema = pl.Schema(
         {fi.name: _yxdb_type_to_polars(fi) for fi in schema_info}
     )
 
+    # Default chunk size for streaming; Polars may override via batch_size.
+    _DEFAULT_BATCH = 65_536
+
     def _source(
         with_columns: list[str] | None,
-        predicate: pl.Expr | None,
+        predicate: "pl.Expr | None",
         n_rows: int | None,
         batch_size: int | None,
-    ) -> Iterator[pl.DataFrame]:
-        table = to_pyarrow(path_str)
-        df = pl.from_arrow(table)
+    ) -> "Iterator[pl.DataFrame]":
+        # Resolve projection: which schema columns to actually decode.
+        if with_columns is not None and len(with_columns) > 0:
+            proj_names: list[str] = list(with_columns)
+        else:
+            proj_names = [fi.name for fi in schema_info]
 
-        if with_columns is not None:
-            df = df.select(with_columns)
-        if predicate is not None:
-            df = df.filter(predicate)
-        if n_rows is not None:
-            df = df.head(n_rows)
+        # Row budget: None -> all rows.
+        remaining = total_rows if n_rows is None else min(n_rows, total_rows)
+        if remaining <= 0:
+            yield _yxdb_columns_to_polars(
+                {name: [] for name in proj_names},
+                schema_by_name,
+            )
+            return
 
-        yield df
+        chunk = batch_size if (batch_size and batch_size > 0) else _DEFAULT_BATCH
+
+        offset = 0
+        # Open the reader once for the duration of the scan.
+        with Reader(path_str) as r:
+            while remaining > 0:
+                take = min(chunk, remaining)
+                cols = r.read_columns_subset(proj_names, offset, take)
+                # cols is dict[str, list]; count from first projected column.
+                first = next(iter(cols.values()))
+                got = len(first)
+                if got == 0:
+                    break
+                df = _yxdb_columns_to_polars(cols, schema_by_name)
+                if predicate is not None:
+                    df = df.filter(predicate)
+                yield df
+                offset += got
+                remaining -= got
+                if got < take:
+                    # Reader is exhausted.
+                    break
 
     return register_io_source(io_source=_source, schema=pl_schema)
 
