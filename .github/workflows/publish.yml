@@ -55,9 +55,9 @@ jobs:
         uses: astral-sh/setup-uv@v5
 
       - name: Build wheels
-        uses: pypa/cibuildwheel@v2.22
+        uses: pypa/cibuildwheel@v3.4
         env:
-          CIBW_BUILD: "cp310-* cp311-* cp312-* cp313-*"
+          CIBW_BUILD: "cp310-* cp311-* cp312-* cp313-* cp314-*"
           CIBW_SKIP: "*-musllinux_* *-win32 *i686"
           CIBW_ARCHS_LINUX: ${{ matrix.os == 'linux-x64' && 'x86_64' || '' }}
           CIBW_ARCHS_MACOS: ${{ matrix.os == 'macos' && 'arm64' || '' }}
