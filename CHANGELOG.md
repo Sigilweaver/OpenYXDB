@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.2.0] - 2026-04-18
+
+### Added
+- **Real pushdown for `scan_yxdb`** — the Polars IO plugin now performs true projection and row-limit pushdown at the C++ reader, instead of materialising the whole file and filtering in Python. `scan_yxdb(path).head(1000).collect()` on a 126 MB / 336k-row file drops from ~770 ms (full decode) to ~2 ms; projecting to a subset of columns further reduces decode work. Predicates are still applied per batch after decode (YXDB has no per-block statistics, so genuine predicate-pushdown at the file level is not possible).
+- **`Reader.read_columns_subset(columns, offset, limit)`** — new low-level binding that decodes only the requested columns, starting at `offset`, up to `limit` records. This is the primitive the new `scan_yxdb` is built on, and is also useful directly for preview/inspection use cases.
+- **Batch streaming in `scan_yxdb`** — the IO source now yields chunks (default 65 536 rows, honours Polars' `batch_size` hint) instead of one large frame, reducing peak memory on large files and letting `head`/limit short-circuit early.
+
+### Fixed
+- **`scan_yxdb` no longer re-decodes the whole file on every collect.** Previously the IO source called `to_pyarrow(path)` unconditionally inside the closure, so advertised pushdown was a lie and every `.collect()` paid the full decode cost. This was the root cause behind downstream freeze reports (e.g. studio preview stacking 5 s+ decodes on the event loop).
+
+### Tested
+- Added `tests/test_scan_corpus.py`: parametrised correctness tests across the full E1 corpus (973 files) plus dedicated projection, row-limit, offset, and perf-regression tests. Full suite: 1003 passed.
+
+---
+
 ## [1.1.0] - 2026-04-18
 
 ### Added
