@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.1.0] - 2026-04-18
+
+### Added
+- **Python 3.14 wheel builds** — added `cp314-*` to the cibuildwheel matrix in the publish workflow; bumped cibuildwheel from v2.22 to v3.4 which ships with CPython 3.14 support
+- **`openyxdb.help()`** — new public function that prints quick-start examples, Polars integration usage, and the full list of supported field types
+- **`python -m openyxdb`** — new module entry point; prints the same help text; `--version` flag prints the installed version
+- **Polars monkey-patching docs** — added a dedicated "Polars integration" section to the README documenting the automatic `pl.read_yxdb()`, `pl.scan_yxdb()`, `df.yxdb.write()`, `lf.yxdb.sink()`, and `register_polars()` APIs that have been available since v1.0.1
+
+### Changed
+- Added `Programming Language :: Python :: 3.14` classifier to `pyproject.toml`
+
+---
+
 ## [1.0.2] - 2026-04-04
 
 ### Fixed
