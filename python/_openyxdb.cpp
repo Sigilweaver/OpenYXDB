@@ -5,6 +5,10 @@
 #include <nanobind/stl/vector.h>
 #include <nanobind/stl/optional.h>
 
+#include <algorithm>
+#include <unordered_map>
+#include <unordered_set>
+
 #include "Open_AlteryxYXDB.h"
 #include "FieldType.h"
 #include "RecordLib/FieldBase.h"
@@ -293,6 +297,79 @@ public:
         return result;
     }
 
+    // Read a subset of records in columnar format with projection/offset/limit.
+    //
+    // columns: if provided, only these columns are decoded (unknown names raise).
+    //          The returned dict preserves the requested order. If None, all
+    //          columns are returned in schema order.
+    // offset:  number of records to skip from the start (clamped to [0, num_records]).
+    // limit:   maximum number of records to return. Negative means "no limit".
+    //
+    // This is the fast path used by the Polars IO plugin for pushdown.
+    nb::dict read_columns_subset(std::optional<std::vector<std::string>> columns,
+                                 int64_t offset,
+                                 int64_t limit) {
+        int64_t total = m_db.GetNumRecords();
+        size_t nFields = m_fields.size();
+
+        // Resolve projection: indices into m_fields, in requested order.
+        std::vector<size_t> proj_indices;
+        std::vector<std::string> proj_names;
+        if (columns.has_value()) {
+            proj_indices.reserve(columns->size());
+            proj_names.reserve(columns->size());
+            // Build name->index map for the schema.
+            std::unordered_map<std::string, size_t> by_name;
+            by_name.reserve(nFields);
+            for (size_t i = 0; i < nFields; ++i) {
+                by_name.emplace(m_schema[i].name, i);
+            }
+            for (const auto& name : *columns) {
+                auto it = by_name.find(name);
+                if (it == by_name.end()) {
+                    throw std::invalid_argument(
+                        "Unknown column in projection: " + name);
+                }
+                proj_indices.push_back(it->second);
+                proj_names.push_back(name);
+            }
+        } else {
+            proj_indices.reserve(nFields);
+            proj_names.reserve(nFields);
+            for (size_t i = 0; i < nFields; ++i) {
+                proj_indices.push_back(i);
+                proj_names.push_back(m_schema[i].name);
+            }
+        }
+
+        // Clamp offset / limit.
+        if (offset < 0) offset = 0;
+        if (offset > total) offset = total;
+        int64_t remaining = total - offset;
+        int64_t to_read = (limit < 0) ? remaining : std::min(limit, remaining);
+
+        size_t nProj = proj_indices.size();
+        std::vector<nb::list> columns_out(nProj);
+
+        if (to_read > 0) {
+            m_db.GoRecord(offset);
+            for (int64_t i = 0; i < to_read; ++i) {
+                const RecordData* rec = m_db.ReadRecord();
+                if (!rec) break;
+                for (size_t p = 0; p < nProj; ++p) {
+                    columns_out[p].append(
+                        field_to_python(m_fields[proj_indices[p]], rec));
+                }
+            }
+        }
+
+        nb::dict result;
+        for (size_t p = 0; p < nProj; ++p) {
+            result[nb::cast(proj_names[p])] = columns_out[p];
+        }
+        return result;
+    }
+
     // Context manager support
     YXDBReader& enter() { return *this; }
 };
@@ -497,6 +574,11 @@ NB_MODULE(_openyxdb, m) {
              "Read all records as a list of dicts")
         .def("read_columns", &YXDBReader::read_columns,
              "Read all records in columnar format (dict of column name to list)")
+        .def("read_columns_subset", &YXDBReader::read_columns_subset,
+             "columns"_a = nb::none(), "offset"_a = 0, "limit"_a = -1,
+             "Read a projected/sliced subset of records in columnar format. "
+             "columns=None returns all columns in schema order; offset skips "
+             "leading records; limit<0 means no limit.")
         .def("__enter__", &YXDBReader::enter, nb::rv_policy::reference)
         .def("__exit__", [](YXDBReader& self, nb::args) { self.close(); });
 
