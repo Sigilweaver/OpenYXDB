@@ -26,7 +26,17 @@ __all__ = [
     "from_pandas",
     "from_polars",
     "register_polars",
+    "help",
 ]
+
+# --------------------------------------------------------------------------- #
+# Help
+# --------------------------------------------------------------------------- #
+
+def help() -> None:
+    """Print usage examples and supported field types."""
+    from openyxdb.__main__ import _print_help
+    _print_help()
 
 # --------------------------------------------------------------------------- #
 # Schema mapping helpers
