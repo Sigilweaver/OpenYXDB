@@ -33,14 +33,18 @@ __all__ = [
 # Help
 # --------------------------------------------------------------------------- #
 
+
 def help() -> None:
     """Print usage examples and supported field types."""
     from openyxdb.__main__ import _print_help
+
     _print_help()
+
 
 # --------------------------------------------------------------------------- #
 # Schema mapping helpers
 # --------------------------------------------------------------------------- #
+
 
 def _yxdb_type_to_arrow(fi: FieldInfo):
     """Map a YXDB FieldInfo to a PyArrow data type."""
@@ -96,7 +100,11 @@ def _arrow_type_to_yxdb(name: str, dtype) -> FieldInfo:
     elif pa.types.is_int32(dtype) or pa.types.is_uint16(dtype):
         fi.type = "Int32"
         fi.size = 4
-    elif pa.types.is_int64(dtype) or pa.types.is_uint32(dtype) or pa.types.is_uint64(dtype):
+    elif (
+        pa.types.is_int64(dtype)
+        or pa.types.is_uint32(dtype)
+        or pa.types.is_uint64(dtype)
+    ):
         fi.type = "Int64"
         fi.size = 8
     elif pa.types.is_float16(dtype) or pa.types.is_float32(dtype):
@@ -129,6 +137,7 @@ def _arrow_type_to_yxdb(name: str, dtype) -> FieldInfo:
 # --------------------------------------------------------------------------- #
 # Core read/write
 # --------------------------------------------------------------------------- #
+
 
 def read_yxdb(path: str | os.PathLike) -> dict[str, list[Any]]:
     """Read a YXDB file and return columnar data as a dict of lists."""
@@ -190,6 +199,7 @@ def _infer_schema(columns: dict[str, list[Any]]) -> list[FieldInfo]:
 # PyArrow
 # --------------------------------------------------------------------------- #
 
+
 def to_pyarrow(path: str | os.PathLike):
     """Read a YXDB file and return a PyArrow Table."""
     import pyarrow as pa
@@ -207,18 +217,21 @@ def to_pyarrow(path: str | os.PathLike):
         # Convert date/time strings to proper types
         if fi.type == "Date":
             import datetime
+
             col_data = [
                 datetime.date.fromisoformat(v) if v is not None else None
                 for v in col_data
             ]
         elif fi.type == "Time":
             import datetime
+
             col_data = [
                 datetime.time.fromisoformat(v) if v is not None else None
                 for v in col_data
             ]
         elif fi.type == "DateTime":
             import datetime
+
             col_data = [
                 datetime.datetime.fromisoformat(v) if v is not None else None
                 for v in col_data
@@ -263,6 +276,7 @@ def from_pyarrow(table, path: str | os.PathLike) -> None:
 # Pandas
 # --------------------------------------------------------------------------- #
 
+
 def to_pandas(path: str | os.PathLike):
     """Read a YXDB file and return a Pandas DataFrame."""
     import pandas as pd
@@ -282,6 +296,7 @@ def from_pandas(df, path: str | os.PathLike) -> None:
 # --------------------------------------------------------------------------- #
 # Polars
 # --------------------------------------------------------------------------- #
+
 
 def _yxdb_type_to_polars(fi: FieldInfo):
     """Map a YXDB FieldInfo to a Polars data type."""
@@ -326,6 +341,7 @@ def _yxdb_columns_to_polars(
     Applies the same date/time string parsing as ``to_pyarrow`` so types match.
     """
     import datetime as _dt
+
     import polars as pl
 
     series: list[pl.Series] = []
@@ -334,19 +350,12 @@ def _yxdb_columns_to_polars(
         t = fi.type
         vals: list[Any] = list(values)
         if t == "Date":
-            vals = [
-                _dt.date.fromisoformat(v) if v is not None else None
-                for v in vals
-            ]
+            vals = [_dt.date.fromisoformat(v) if v is not None else None for v in vals]
         elif t == "Time":
-            vals = [
-                _dt.time.fromisoformat(v) if v is not None else None
-                for v in vals
-            ]
+            vals = [_dt.time.fromisoformat(v) if v is not None else None for v in vals]
         elif t == "DateTime":
             vals = [
-                _dt.datetime.fromisoformat(v) if v is not None else None
-                for v in vals
+                _dt.datetime.fromisoformat(v) if v is not None else None for v in vals
             ]
         series.append(pl.Series(name, vals, dtype=_yxdb_type_to_polars(fi)))
     return pl.DataFrame(series)
@@ -383,9 +392,10 @@ def scan_yxdb(path: str | os.PathLike) -> "pl.LazyFrame":
         df = openyxdb.scan_yxdb("file.yxdb").collect()
         df = openyxdb.scan_yxdb("file.yxdb").select("col_a", "col_b").head(100).collect()
     """
+    from typing import Iterator
+
     import polars as pl
     from polars.io.plugins import register_io_source
-    from typing import Iterator
 
     path_str = str(path)
 
@@ -394,9 +404,7 @@ def scan_yxdb(path: str | os.PathLike) -> "pl.LazyFrame":
         total_rows = r.num_records
 
     schema_by_name = {fi.name: fi for fi in schema_info}
-    pl_schema = pl.Schema(
-        {fi.name: _yxdb_type_to_polars(fi) for fi in schema_info}
-    )
+    pl_schema = pl.Schema({fi.name: _yxdb_type_to_polars(fi) for fi in schema_info})
 
     # Default chunk size for streaming; Polars may override via batch_size.
     _DEFAULT_BATCH = 65_536
@@ -458,6 +466,7 @@ def from_polars(df, path: str | os.PathLike) -> None:
 # Polars namespace plugins + monkey-patching
 # --------------------------------------------------------------------------- #
 
+
 def _read_yxdb_polars(path: str | os.PathLike) -> "pl.DataFrame":
     """Read a YXDB file into a Polars DataFrame. Alias for ``openyxdb.to_polars``."""
     return to_polars(path)
@@ -480,6 +489,7 @@ def register_polars() -> None:
 
     # -- Namespace plugins -------------------------------------------------- #
     if not hasattr(pl.DataFrame, "yxdb"):
+
         @pl.api.register_dataframe_namespace("yxdb")
         class YxdbDataFrameNamespace:
             def __init__(self, df: pl.DataFrame):
@@ -490,6 +500,7 @@ def register_polars() -> None:
                 from_polars(self._df, path)
 
     if not hasattr(pl.LazyFrame, "yxdb"):
+
         @pl.api.register_lazyframe_namespace("yxdb")
         class YxdbLazyFrameNamespace:
             def __init__(self, lf: pl.LazyFrame):
