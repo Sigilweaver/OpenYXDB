@@ -453,3 +453,148 @@ class TestPolarsPlugin:
 
         result = openyxdb.to_polars(tmp_yxdb)
         assert result["n"].to_list() == [20, 30]
+
+
+# --------------------------------------------------------------------------- #
+# Streaming sink tests
+# --------------------------------------------------------------------------- #
+
+class TestSinkYxdb:
+    def test_sink_from_lazyframe(self, tmp_yxdb):
+        import polars as pl
+
+        lf = pl.DataFrame({"a": list(range(1000)), "b": ["x"] * 1000}).lazy()
+        openyxdb.sink_yxdb(lf, tmp_yxdb, chunk_size=128)
+
+        result = openyxdb.to_polars(tmp_yxdb)
+        assert result.shape == (1000, 2)
+        assert result["a"].to_list()[:3] == [0, 1, 2]
+
+    def test_sink_applies_filter_and_projection(self, tmp_yxdb):
+        import polars as pl
+
+        lf = (
+            pl.DataFrame({"x": list(range(100)), "y": list(range(100, 200))})
+            .lazy()
+            .filter(pl.col("x") >= 10)
+            .select("y")
+        )
+        openyxdb.sink_yxdb(lf, tmp_yxdb, chunk_size=32)
+
+        result = openyxdb.to_polars(tmp_yxdb)
+        assert result.columns == ["y"]
+        assert result.shape == (90, 1)
+        assert result["y"].to_list()[0] == 110
+
+    def test_sink_accepts_dataframe(self, tmp_yxdb):
+        import polars as pl
+
+        df = pl.DataFrame({"a": [1, 2, 3]})
+        openyxdb.sink_yxdb(df, tmp_yxdb)
+
+        result = openyxdb.to_polars(tmp_yxdb)
+        assert result["a"].to_list() == [1, 2, 3]
+
+    def test_sink_empty_result(self, tmp_yxdb):
+        import polars as pl
+
+        lf = pl.DataFrame({"n": [1, 2, 3]}).lazy().filter(pl.col("n") > 100)
+        openyxdb.sink_yxdb(lf, tmp_yxdb)
+
+        with openyxdb._openyxdb.Reader(tmp_yxdb) as r:
+            assert r.num_records == 0
+            assert [f.name for f in r.schema] == ["n"]
+
+    def test_sink_roundtrip_via_scan(self, tmp_yxdb):
+        import polars as pl
+
+        src = pl.DataFrame({"id": list(range(500)), "v": [i * 1.5 for i in range(500)]})
+        openyxdb.sink_yxdb(src.lazy(), tmp_yxdb, chunk_size=64)
+
+        # Round-trip through scan_yxdb with projection + limit pushdown
+        out = (
+            openyxdb.scan_yxdb(tmp_yxdb)
+            .select("id")
+            .head(10)
+            .collect()
+        )
+        assert out.columns == ["id"]
+        assert out["id"].to_list() == list(range(10))
+
+
+# --------------------------------------------------------------------------- #
+# DuckDB tests
+# --------------------------------------------------------------------------- #
+
+class TestDuckDB:
+    def test_to_duckdb_default_connection(self, tmp_yxdb):
+        openyxdb.write_yxdb(tmp_yxdb, {"id": [1, 2, 3], "name": ["a", "b", "c"]})
+        rel = openyxdb.to_duckdb(tmp_yxdb)
+        rows = rel.fetchall()
+        assert sorted(rows) == [(1, "a"), (2, "b"), (3, "c")]
+
+    def test_to_duckdb_registers_table(self, tmp_yxdb):
+        import duckdb
+
+        openyxdb.write_yxdb(tmp_yxdb, {"v": [10.0, 20.0, 30.0]})
+        con = duckdb.connect()
+        openyxdb.to_duckdb(tmp_yxdb, con=con, table_name="yx")
+
+        result = con.execute("SELECT SUM(v) FROM yx").fetchone()
+        assert result[0] == 60.0
+
+    def test_register_duckdb(self, tmp_yxdb):
+        import duckdb
+
+        openyxdb.write_yxdb(tmp_yxdb, {"n": [1, 2, 3, 4, 5]})
+        con = duckdb.connect()
+        openyxdb.register_duckdb(con, "data", tmp_yxdb)
+
+        result = con.execute("SELECT COUNT(*) FROM data WHERE n > 2").fetchone()
+        assert result[0] == 3
+
+    def test_from_duckdb_sql(self, tmp_yxdb):
+        import duckdb
+
+        con = duckdb.connect()
+        openyxdb.from_duckdb(
+            "SELECT range AS i, range * 2 AS dbl FROM range(10)",
+            tmp_yxdb,
+            con=con,
+        )
+
+        result = openyxdb.read_yxdb(tmp_yxdb)
+        assert list(result["i"]) == list(range(10))
+        assert list(result["dbl"]) == [i * 2 for i in range(10)]
+
+    def test_from_duckdb_relation(self, tmp_yxdb):
+        import duckdb
+
+        con = duckdb.connect()
+        rel = con.sql("SELECT 'hello' AS msg, 42 AS num")
+        openyxdb.from_duckdb(rel, tmp_yxdb)
+
+        result = openyxdb.read_yxdb(tmp_yxdb)
+        assert list(result["msg"]) == ["hello"]
+        assert list(result["num"]) == [42]
+
+    def test_duckdb_roundtrip(self, tmp_yxdb):
+        import duckdb
+
+        openyxdb.write_yxdb(
+            tmp_yxdb,
+            {"id": [1, 2, 3], "score": [9.5, 8.1, 7.2]},
+        )
+        con = duckdb.connect()
+        openyxdb.register_duckdb(con, "scores", tmp_yxdb)
+
+        out_path = tmp_yxdb + ".out.yxdb"
+        openyxdb.from_duckdb(
+            "SELECT id, score FROM scores WHERE score > 7.5",
+            out_path,
+            con=con,
+        )
+
+        out = openyxdb.read_yxdb(out_path)
+        assert list(out["id"]) == [1, 2]
+        assert [round(v, 1) for v in out["score"]] == [9.5, 8.1]

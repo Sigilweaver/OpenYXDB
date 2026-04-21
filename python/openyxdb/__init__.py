@@ -22,9 +22,13 @@ __all__ = [
     "to_pandas",
     "to_polars",
     "scan_yxdb",
+    "sink_yxdb",
     "from_pyarrow",
     "from_pandas",
     "from_polars",
+    "to_duckdb",
+    "from_duckdb",
+    "register_duckdb",
     "register_polars",
     "help",
 ]
@@ -243,20 +247,21 @@ def to_pyarrow(path: str | os.PathLike):
     return pa.table(arrays, schema=pa.schema(fields))
 
 
-def from_pyarrow(table, path: str | os.PathLike) -> None:
-    """Write a PyArrow Table to a YXDB file."""
-    import pyarrow as pa
+def _arrow_schema_to_yxdb(arrow_schema) -> list[FieldInfo]:
+    """Build a YXDB schema (list[FieldInfo]) from a PyArrow Schema."""
+    return [_arrow_type_to_yxdb(f.name, f.type) for f in arrow_schema]
 
-    schema = []
-    for field in table.schema:
-        schema.append(_arrow_type_to_yxdb(field.name, field.type))
 
-    columns = {}
-    for i, field in enumerate(table.schema):
-        col = table.column(i)
+def _arrow_batch_to_columns(batch, yxdb_schema: list[FieldInfo]) -> dict[str, list]:
+    """Convert a PyArrow RecordBatch or Table into a YXDB column dict.
+
+    Applies date/time stringification so the values match the YXDB writer's
+    expected input format.
+    """
+    columns: dict[str, list] = {}
+    for i, fi in enumerate(yxdb_schema):
+        col = batch.column(i)
         py_list = col.to_pylist()
-        fi = schema[i]
-        # Convert date/time objects to strings for YXDB
         if fi.type == "Date":
             py_list = [v.isoformat() if v is not None else None for v in py_list]
         elif fi.type == "Time":
@@ -266,10 +271,27 @@ def from_pyarrow(table, path: str | os.PathLike) -> None:
                 v.strftime("%Y-%m-%d %H:%M:%S") if v is not None else None
                 for v in py_list
             ]
-        columns[field.name] = py_list
+        columns[fi.name] = py_list
+    return columns
 
+
+def from_pyarrow(
+    table,
+    path: str | os.PathLike,
+    chunk_size: int | None = None,
+) -> None:
+    """Write a PyArrow Table to a YXDB file.
+
+    If ``chunk_size`` is provided, the table is written in batches of that
+    many rows, which reduces peak Python memory on very large tables.
+    """
+    schema = _arrow_schema_to_yxdb(table.schema)
     with Writer(str(path), schema) as w:
-        w.write_columns(columns)
+        if chunk_size and chunk_size > 0:
+            for batch in table.to_batches(max_chunksize=chunk_size):
+                w.write_columns(_arrow_batch_to_columns(batch, schema))
+        else:
+            w.write_columns(_arrow_batch_to_columns(table, schema))
 
 
 # --------------------------------------------------------------------------- #
@@ -285,12 +307,15 @@ def to_pandas(path: str | os.PathLike):
     return table.to_pandas()
 
 
-def from_pandas(df, path: str | os.PathLike) -> None:
-    """Write a Pandas DataFrame to a YXDB file."""
+def from_pandas(df, path: str | os.PathLike, chunk_size: int | None = None) -> None:
+    """Write a Pandas DataFrame to a YXDB file.
+
+    If ``chunk_size`` is provided, rows are written in batches of that size.
+    """
     import pyarrow as pa
 
     table = pa.Table.from_pandas(df)
-    from_pyarrow(table, path)
+    from_pyarrow(table, path, chunk_size=chunk_size)
 
 
 # --------------------------------------------------------------------------- #
@@ -456,10 +481,139 @@ def scan_yxdb(path: str | os.PathLike) -> "pl.LazyFrame":
     return register_io_source(io_source=_source, schema=pl_schema)
 
 
-def from_polars(df, path: str | os.PathLike) -> None:
-    """Write a Polars DataFrame to a YXDB file."""
+def from_polars(df, path: str | os.PathLike, chunk_size: int | None = None) -> None:
+    """Write a Polars DataFrame to a YXDB file.
+
+    If ``chunk_size`` is provided, the DataFrame is written to the underlying
+    YXDB writer in batches of that many rows.
+    """
     table = df.to_arrow()
-    from_pyarrow(table, path)
+    from_pyarrow(table, path, chunk_size=chunk_size)
+
+
+def sink_yxdb(
+    lf,
+    path: str | os.PathLike,
+    *,
+    chunk_size: int = 65_536,
+    engine: str = "streaming",
+) -> None:
+    """Execute a Polars LazyFrame and stream the result to a YXDB file.
+
+    The plan is executed on the Polars ``streaming`` engine (falling back to
+    the default engine if unavailable) and written to disk in chunks of
+    ``chunk_size`` rows so the writer never holds more than one batch in
+    Python memory at a time.
+
+    .. note::
+        Polars does not (as of 1.40) expose a public plugin API for custom
+        ``sink_*`` formats, so the query result still passes through a single
+        ``collect()`` call before being chunk-written. True per-batch push
+        sinks require a plugin API from Polars upstream.
+
+    Accepts either a ``LazyFrame`` or a ``DataFrame`` for convenience.
+    """
+    import polars as pl
+
+    if isinstance(lf, pl.DataFrame):
+        from_polars(lf, path, chunk_size=chunk_size)
+        return
+
+    try:
+        df = lf.collect(engine=engine)
+    except TypeError:
+        # Older polars versions without the ``engine`` kwarg.
+        df = lf.collect()
+
+    arrow_table = df.to_arrow()
+    schema = _arrow_schema_to_yxdb(arrow_table.schema)
+    with Writer(str(path), schema) as w:
+        if arrow_table.num_rows == 0:
+            return
+        for batch in arrow_table.to_batches(max_chunksize=chunk_size):
+            w.write_columns(_arrow_batch_to_columns(batch, schema))
+
+
+# --------------------------------------------------------------------------- #
+# DuckDB integration
+# --------------------------------------------------------------------------- #
+
+
+def to_duckdb(
+    path: str | os.PathLike,
+    con=None,
+    table_name: str | None = None,
+):
+    """Load a YXDB file into DuckDB and return a DuckDB relation.
+
+    If ``con`` is ``None``, a new in-memory connection is created. If
+    ``table_name`` is provided, the loaded data is also registered as a
+    view on the connection so it can be referenced from SQL by that name.
+
+    Example::
+
+        import duckdb, openyxdb
+        con = duckdb.connect()
+        rel = openyxdb.to_duckdb("data.yxdb", con, table_name="yx")
+        con.execute("SELECT COUNT(*) FROM yx").fetchone()
+    """
+    import duckdb
+
+    if con is None:
+        con = duckdb.connect()
+
+    table = to_pyarrow(path)
+    if table_name is not None:
+        con.register(table_name, table)
+        return con.table(table_name)
+    return con.from_arrow(table)
+
+
+def from_duckdb(
+    source,
+    path: str | os.PathLike,
+    con=None,
+    chunk_size: int | None = None,
+) -> None:
+    """Write a DuckDB query or relation to a YXDB file.
+
+    ``source`` may be:
+
+    - a SQL query string (requires ``con``)
+    - a :class:`duckdb.DuckDBPyRelation`
+    - a :class:`duckdb.DuckDBPyConnection` already positioned on a result
+    """
+    import duckdb
+
+    if isinstance(source, str):
+        if con is None:
+            raise ValueError(
+                "from_duckdb(sql_string, ...) requires a ``con`` argument"
+            )
+        rel = con.sql(source)
+    elif isinstance(source, duckdb.DuckDBPyConnection):
+        rel = source
+    else:
+        rel = source
+
+    # DuckDB's .arrow() may return a pa.Table or a RecordBatchReader depending
+    # on version; normalise to a Table.
+    arrow_obj = rel.arrow()
+    if hasattr(arrow_obj, "read_all"):
+        table = arrow_obj.read_all()
+    else:
+        table = arrow_obj
+    from_pyarrow(table, path, chunk_size=chunk_size)
+
+
+def register_duckdb(con, name: str, path: str | os.PathLike) -> None:
+    """Register a YXDB file as a named view on a DuckDB connection.
+
+    The file is read eagerly into an Arrow table and registered; subsequent
+    queries against ``name`` do not re-read the file.
+    """
+    table = to_pyarrow(path)
+    con.register(name, table)
 
 
 # --------------------------------------------------------------------------- #
@@ -506,9 +660,19 @@ def register_polars() -> None:
             def __init__(self, lf: pl.LazyFrame):
                 self._lf = lf
 
-            def sink(self, path: str | os.PathLike) -> None:
-                """Collect this LazyFrame and write the result to a YXDB file."""
-                from_polars(self._lf.collect(), path)
+            def sink(
+                self,
+                path: str | os.PathLike,
+                *,
+                chunk_size: int = 65_536,
+                engine: str = "streaming",
+            ) -> None:
+                """Execute this LazyFrame on the streaming engine and
+                stream the result to a YXDB file in chunks.
+                """
+                sink_yxdb(
+                    self._lf, path, chunk_size=chunk_size, engine=engine
+                )
 
     # -- Top-level monkey patches ------------------------------------------- #
     if not hasattr(pl, "read_yxdb"):

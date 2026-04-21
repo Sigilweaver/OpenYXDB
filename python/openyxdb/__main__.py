@@ -51,6 +51,16 @@ Quick start:
   # Lazy scan (Polars IO plugin)
   lf = openyxdb.scan_yxdb("data.yxdb")
 
+  # Streaming sink (Polars LazyFrame -> YXDB)
+  openyxdb.sink_yxdb(lf, "out.yxdb", chunk_size=65_536)
+
+  # DuckDB integration
+  import duckdb
+  con = duckdb.connect()
+  openyxdb.register_duckdb(con, "yx", "data.yxdb")
+  con.execute("SELECT COUNT(*) FROM yx").fetchone()
+  openyxdb.from_duckdb("SELECT * FROM yx WHERE id > 10", "out.yxdb", con=con)
+
   # Low-level API
   with openyxdb.Reader("data.yxdb") as r:
       columns = r.read_columns()
@@ -62,9 +72,9 @@ Polars integration (automatic on import):
   import openyxdb
 
   df = pl.read_yxdb("data.yxdb")       # eager
-  lf = pl.scan_yxdb("data.yxdb")       # lazy
+  lf = pl.scan_yxdb("data.yxdb")       # lazy w/ projection + row-limit pushdown
   df.yxdb.write("out.yxdb")            # namespace
-  lf.yxdb.sink("out.yxdb")             # namespace
+  lf.yxdb.sink("out.yxdb")             # namespace — chunked streaming write
 
 Supported field types:
   Bool, Byte, Int16, Int32, Int64, FixedDecimal, Float, Double,

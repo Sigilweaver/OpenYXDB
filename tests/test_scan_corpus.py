@@ -162,3 +162,97 @@ def test_unknown_projection_column_raises() -> None:
     with pytest.raises(Exception):
         # Polars may wrap the underlying ValueError.
         openyxdb.scan_yxdb(str(path)).select("__definitely_not_a_column__").collect()
+
+
+# --------------------------------------------------------------------------- #
+# Streaming sink + DuckDB corpus coverage
+# --------------------------------------------------------------------------- #
+
+# A smaller sample is used for roundtrip tests — we don't need to rewrite
+# every file, just confirm the streaming sink and DuckDB helpers handle the
+# full diversity of schemas the corpus provides.
+_ROUNDTRIP_SAMPLE = ALL_FILES[:: max(1, len(ALL_FILES) // 25)][:25]
+
+
+@pytest.mark.parametrize(
+    "path",
+    _ROUNDTRIP_SAMPLE,
+    ids=lambda p: p.name,
+)
+def test_sink_yxdb_roundtrip(path: Path, tmp_path: Path) -> None:
+    """Round-trip real corpus files through ``sink_yxdb`` and compare."""
+    if path.stat().st_size > _FULL_SCAN_SIZE_CAP:
+        pytest.skip("file too large for roundtrip in CI")
+    ref = openyxdb.to_polars(str(path))
+    out = tmp_path / "out.yxdb"
+    openyxdb.sink_yxdb(ref.lazy(), out, chunk_size=1024)
+    got = openyxdb.to_polars(str(out))
+    assert got.columns == ref.columns, path.name
+    assert got.height == ref.height, path.name
+    assert got.equals(ref), path.name
+
+
+def test_duckdb_roundtrip_corpus(tmp_path: Path) -> None:
+    """Register a corpus file in DuckDB, query it, and write the result back."""
+    duckdb = pytest.importorskip("duckdb")
+
+    # Pick a small file with plenty of rows.
+    candidates = [
+        p for p in ALL_FILES
+        if p.stat().st_size <= 256 * 1024
+    ]
+    if not candidates:
+        pytest.skip("no small corpus files available")
+    path = candidates[0]
+
+    with Reader(str(path)) as r:
+        names = [fi.name for fi in r.schema]
+        n = r.num_records
+    if n == 0 or not names:
+        pytest.skip("empty file")
+
+    con = duckdb.connect()
+    openyxdb.register_duckdb(con, "yx", str(path))
+
+    count = con.execute("SELECT COUNT(*) FROM yx").fetchone()[0]
+    assert count == n
+
+    # Write a projection to a new YXDB file and verify.
+    out = tmp_path / "duckdb_out.yxdb"
+    first_col = names[0]
+    openyxdb.from_duckdb(
+        f'SELECT "{first_col}" FROM yx',
+        out,
+        con=con,
+    )
+    result = openyxdb.to_polars(str(out))
+    assert result.columns == [first_col]
+    assert result.height == n
+
+
+def test_scan_head_then_sink(tmp_path: Path) -> None:
+    """End-to-end: lazy scan with head pushdown, streaming sink, re-read."""
+    # Pick a largish file to exercise batched streaming both ways.
+    candidates = sorted(
+        (p for p in ALL_FILES if p.stat().st_size <= _FULL_SCAN_SIZE_CAP),
+        key=lambda p: p.stat().st_size,
+        reverse=True,
+    )
+    if not candidates:
+        pytest.skip("no suitable files")
+    path = candidates[0]
+
+    with Reader(str(path)) as r:
+        n = r.num_records
+    if n < 200:
+        pytest.skip("file too small to exercise chunking")
+
+    out = tmp_path / "piped.yxdb"
+    lf = openyxdb.scan_yxdb(str(path)).head(150)
+    openyxdb.sink_yxdb(lf, out, chunk_size=64)
+
+    got = openyxdb.to_polars(str(out))
+    ref = openyxdb.to_polars(str(path)).head(150)
+    assert got.height == 150
+    assert got.equals(ref), path.name
+
