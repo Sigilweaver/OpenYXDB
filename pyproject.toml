@@ -26,7 +26,8 @@ classifiers = [
 dependencies = []
 
 [project.urls]
-Homepage = "https://github.com/Sigilweaver/OpenYXDB"
+Homepage = "https://sigilweaver.app/openyxdb/"
+Documentation = "https://sigilweaver.app/openyxdb/docs"
 Source = "https://github.com/Sigilweaver/OpenYXDB"
 Issues = "https://github.com/Sigilweaver/OpenYXDB/issues"
 License = "https://github.com/Sigilweaver/OpenYXDB/blob/main/LICENSE"
