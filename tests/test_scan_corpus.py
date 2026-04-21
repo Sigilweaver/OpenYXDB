@@ -8,13 +8,11 @@ projection, and row-limit pushdown. Also includes a perf guard that confirms
 
 from __future__ import annotations
 
-import os
 import time
 from pathlib import Path
 
-import pytest
-
 import openyxdb
+import pytest
 from openyxdb._openyxdb import Reader
 
 pl = pytest.importorskip("polars")
@@ -126,7 +124,7 @@ def test_head_is_near_constant_time() -> None:
     # file takes hundreds of ms to seconds; head must be orders of magnitude
     # faster.
     assert dt < 0.5, (
-        f"head(1000) on {largest.name} ({size_mb:.1f} MB) took {dt*1000:.0f}ms; "
+        f"head(1000) on {largest.name} ({size_mb:.1f} MB) took {dt * 1000:.0f}ms; "
         "row-limit pushdown regressed"
     )
 
@@ -153,8 +151,8 @@ def test_projection_reduces_work() -> None:
     # Single-column scan should be meaningfully faster than full-column scan.
     # Use a lenient ratio to avoid CI flakiness.
     assert t_proj < t_full, (
-        f"projection scan ({t_proj*1000:.0f}ms) not faster than full "
-        f"({t_full*1000:.0f}ms) for {largest.name}"
+        f"projection scan ({t_proj * 1000:.0f}ms) not faster than full "
+        f"({t_full * 1000:.0f}ms) for {largest.name}"
     )
 
 
