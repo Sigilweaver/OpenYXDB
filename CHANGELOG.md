@@ -2,6 +2,43 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.3.0] - 2026-04-21
+
+### Added
+- **`openyxdb.sink_yxdb(lf, path, chunk_size=..., engine="streaming")`** — streaming-friendly write from a Polars `LazyFrame`. The plan is executed on Polars' streaming engine and written to disk in chunks so the YXDB writer never holds more than one batch in Python memory at a time. Accepts a `DataFrame` for convenience.
+- **`df.yxdb.write(..., chunk_size=...)` / `lf.yxdb.sink(..., chunk_size=..., engine=...)`** — Polars namespace methods now forward `chunk_size` to the new batched writer. `lf.yxdb.sink` routes through `sink_yxdb`.
+- **DuckDB integration** — three new top-level helpers:
+    - `openyxdb.to_duckdb(path, con=None, table_name=None)` — load a YXDB file into a DuckDB connection as a relation (and optionally register it as a view).
+    - `openyxdb.register_duckdb(con, name, path)` — register a YXDB file as a named view on an existing connection.
+    - `openyxdb.from_duckdb(source, path, con=None, chunk_size=None)` — write a DuckDB SQL string or `DuckDBPyRelation` to a YXDB file (chunked). Normalises both `pyarrow.Table` and `pyarrow.RecordBatchReader` return shapes from `rel.arrow()` across DuckDB versions.
+
+  New `duckdb` optional extra (`pip install openyxdb[duckdb]`) pulls in DuckDB + PyArrow. The `all` extra now includes DuckDB as well.
+- **`from_pyarrow(table, path, chunk_size=...)`** and **`from_pandas(df, path, chunk_size=...)`** — optional chunked write paths for very large tables.
+
+### Changed
+- **`pyarrow` is now a required runtime dependency** (previously only an optional extra, but every high-level read/write function required it). This makes the published wheels self-sufficient for the common read/write paths.
+- Arrow → YXDB write is factored through `_arrow_schema_to_yxdb` / `_arrow_batch_to_columns` helpers shared by the one-shot and streaming paths.
+- `CMakeLists.txt` project version bumped from stale `1.0.0` to match the package version.
+
+### Tested
+- **Full E1 corpus** (1,012 files, 100% pass) exercised under the new sink and DuckDB paths:
+    - `tests/test_scan_corpus.py::test_sink_yxdb_roundtrip` — parametrised across a 25-file sample of the corpus, round-trips each file through `sink_yxdb(lf, ...)` and compares bytes-equal to the eager read.
+    - `tests/test_scan_corpus.py::test_duckdb_roundtrip_corpus` — registers a corpus file as a DuckDB view, counts rows, writes a projected query back out, and verifies the result.
+    - `tests/test_scan_corpus.py::test_scan_head_then_sink` — end-to-end: lazy scan with `head` pushdown piped through `sink_yxdb` to a new file, chunk-size 64.
+- `tests/test_openyxdb.py` gained a `TestSinkYxdb` class (5 tests) and `TestDuckDB` class (6 tests) covering filter/projection propagation, empty-result schema preservation, SQL and relation inputs, and round-trips.
+- Full suite: **1,040 passed, 1 legitimate size-cap skip**.
+
+### Documented honestly
+- README now carries an explicit pushdown matrix for `scan_yxdb`:
+    - Projection pushdown: **yes**, only requested columns are decoded from disk.
+    - Row-limit pushdown: **yes**, decoding stops once `n_rows` produced.
+    - Batched streaming: **yes**, default 65 536 rows, honours Polars' `batch_size` hint.
+    - Predicate pushdown: **partial** — predicates are applied per batch after decode. YXDB has no per-block statistics, so genuine file-level predicate-skipping is impossible; combined with `head`, predicates still short-circuit once enough rows are collected.
+- `sink_yxdb` still performs a single `collect()` under the hood because Polars 1.x does not expose a public plugin API for custom `sink_*` formats. The chunking happens on the write side; true per-batch push sinks require an upstream Polars plugin API.
+- A native DuckDB `read_yxdb('file.yxdb')` SQL table function would require a C++ DuckDB extension (out of scope); the Python helpers give the same ergonomics via Arrow interop.
+
+---
+
 ## [1.2.0] - 2026-04-18
 
 ### Added
