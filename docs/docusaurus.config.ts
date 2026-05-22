@@ -86,11 +86,6 @@ const config: Config = {
                     position: 'right',
                 },
                 {
-                    href: 'https://sigilweaver.app',
-                    label: 'Website',
-                    position: 'right',
-                },
-                {
                     href: 'https://github.com/Sigilweaver/OpenYXDB',
                     label: 'GitHub',
                     position: 'right',
@@ -107,13 +102,6 @@ const config: Config = {
                         { label: 'Issues', href: 'https://github.com/Sigilweaver/OpenYXDB/issues' },
                         { label: 'PyPI', href: 'https://pypi.org/project/openyxdb/' },
                         { label: 'Changelog', href: 'https://github.com/Sigilweaver/OpenYXDB/blob/main/CHANGELOG.md' },
-                    ],
-                },
-                {
-                    title: 'Sigilweaver',
-                    items: [
-                        { label: 'Website', href: 'https://sigilweaver.app' },
-                        { label: 'Other projects', href: 'https://sigilweaver.app#projects' },
                     ],
                 },
                 {
