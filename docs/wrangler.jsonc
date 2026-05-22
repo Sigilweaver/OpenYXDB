@@ -1,0 +1,17 @@
+{
+    "name": "openyxdb-docs",
+    "compatibility_date": "2024-11-26",
+    "assets": {
+        "directory": "./build"
+    },
+    "routes": [
+        {
+            "pattern": "sigilweaver.app/openyxdb/docs",
+            "zone_name": "sigilweaver.app"
+        },
+        {
+            "pattern": "sigilweaver.app/openyxdb/docs/*",
+            "zone_name": "sigilweaver.app"
+        }
+    ]
+}
