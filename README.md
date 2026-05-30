@@ -1,5 +1,10 @@
 # OpenYXDB
 
+[![CI](https://github.com/Sigilweaver/OpenYXDB/actions/workflows/ci.yml/badge.svg)](https://github.com/Sigilweaver/OpenYXDB/actions/workflows/ci.yml)
+[![License: GPL v3](https://img.shields.io/badge/license-GPL--3.0-blue.svg)](LICENSE)
+[![PyPI](https://img.shields.io/pypi/v/openyxdb.svg)](https://pypi.org/project/openyxdb/)
+[![Docs](https://img.shields.io/badge/docs-sigilweaver.app-blue)](https://sigilweaver.app/openyxdb/docs/)
+
 Read and write Alteryx YXDB files from Python and C++.
 
 Built on [Alteryx's official open-source YXDB implementation](https://github.com/alteryx/OpenYXDB), released under GPLv3. This fork modernizes the build system, fixes bugs, adds cross-platform support, and wraps the C++ core in a Python package with first-class PyArrow, Pandas, and Polars integration.
