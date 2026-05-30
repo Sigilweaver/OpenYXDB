@@ -13,6 +13,8 @@
 #include "FieldType.h"
 #include "RecordLib/FieldBase.h"
 #include "RecordLib/RecordInfo.h"
+#include "e2/E2Reader.h"
+#include "e2/E2Snappy.h"
 
 namespace nb = nanobind;
 using namespace nb::literals;
@@ -214,15 +216,103 @@ static nb::object field_to_python(const FieldBase* field, const RecordData* rec)
     }
 }
 
-// Python-facing Reader class
+// Helper: convert a single decoded E2 cell to a Python object, given the
+// declared field type so we can pick the right Python representation.
+static nb::object e2_cell_to_python(const Alteryx::OpenYXDB::e2::E2Cell& c,
+                                    Alteryx::OpenYXDB::e2::E2FieldType ft) {
+    using K = Alteryx::OpenYXDB::e2::E2Cell::Kind;
+    using FT = Alteryx::OpenYXDB::e2::E2FieldType;
+    if (c.kind == K::Null) return nb::none();
+    switch (ft) {
+        case FT::Bool:
+            if (c.kind == K::Bool) return nb::cast(c.boolean);
+            return nb::none();
+        case FT::Byte:
+        case FT::Int16:
+        case FT::Int32:
+        case FT::Int64:
+            if (c.kind == K::Int64) return nb::cast(c.integer);
+            return nb::none();
+        case FT::Float:
+        case FT::Double:
+            if (c.kind == K::Double) return nb::cast(c.real);
+            return nb::none();
+        case FT::String:
+        case FT::WString:
+        case FT::V_String:
+        case FT::V_WString:
+        case FT::Date:
+        case FT::Time:
+        case FT::DateTime:
+        case FT::FixedDecimal:
+            if (c.kind == K::Text) return nb::cast(c.text);
+            if (c.kind == K::Bytes) {
+                // Unresolved blob ref -> treat as null
+                return nb::none();
+            }
+            return nb::none();
+        case FT::Blob:
+        case FT::SpatialObj:
+            if (c.kind == K::Bytes)
+                return nb::bytes(reinterpret_cast<const char*>(c.bytes.data()),
+                                 c.bytes.size());
+            return nb::none();
+    }
+    return nb::none();
+}
+
+// Sniff the first bytes of a file and return true if it looks like an E2
+// (AMP-engine) YXDB. Reads up to 24 bytes; missing file -> false (the E1
+// open path will produce the proper "cannot open" error).
+static bool is_e2_file(const std::string& path) {
+    FILE* fp = std::fopen(path.c_str(), "rb");
+    if (!fp) return false;
+    uint8_t buf[Alteryx::OpenYXDB::e2::E2_MAGIC_PREFIX_LEN];
+    size_t got = std::fread(buf, 1, sizeof(buf), fp);
+    std::fclose(fp);
+    if (got < sizeof(buf)) return false;
+    return Alteryx::OpenYXDB::e2::LooksLikeE2(buf, got);
+}
+
+// Python-facing Reader class.
+//
+// Dispatches between two backends based on the file's magic bytes:
+//   - the original LZF + 512-byte-header format (Open_AlteryxYXDB)
+//   - the AMP-engine Snappy + 100-byte-header format (E2Reader)
+//
+// Reads are supported for both. Writes only target the original format.
 class YXDBReader {
+    // Original-format backend
     Open_AlteryxYXDB m_db;
     std::vector<const FieldBase*> m_fields;
+
+    // E2-format backend
+    std::unique_ptr<Alteryx::OpenYXDB::e2::E2Reader> m_e2;
+
     std::vector<FieldInfo> m_schema;
     bool m_open = false;
+    bool m_isE2 = false;
 
 public:
-    YXDBReader(const std::string& path) {
+    YXDBReader(const std::string& path, bool allow_unverified_types = false) {
+        m_isE2 = is_e2_file(path);
+        if (m_isE2) {
+            m_e2 = std::make_unique<Alteryx::OpenYXDB::e2::E2Reader>(path);
+            m_e2->SetAllowUnverifiedTypes(allow_unverified_types);
+            m_open = true;
+            const auto& meta = m_e2->Schema();
+            m_schema.reserve(meta.size());
+            for (const auto& f : meta) {
+                FieldInfo info;
+                info.name = f.name;
+                info.type = Alteryx::OpenYXDB::e2::E2FieldTypeName(f.type);
+                info.size = f.size;
+                info.scale = f.scale;
+                m_schema.push_back(info);
+            }
+            return;
+        }
+
         m_db.Open(utf8_to_wstring(path));
         m_open = true;
 
@@ -245,18 +335,44 @@ public:
 
     void close() {
         if (m_open) {
-            m_db.Close();
+            if (m_isE2) {
+                m_e2.reset();
+            } else {
+                m_db.Close();
+            }
             m_open = false;
         }
     }
 
-    int64_t num_records() { return m_db.GetNumRecords(); }
+    std::string format() const { return m_isE2 ? "E2" : "E1"; }
+
+    int64_t num_records() {
+        if (m_isE2) return m_e2->NumRecords();
+        return m_db.GetNumRecords();
+    }
 
     const std::vector<FieldInfo>& schema() const { return m_schema; }
 
     // Read all records as a list of dicts (column-name -> value)
     nb::list read_records() {
         nb::list rows;
+        if (m_isE2) {
+            // Build columns via the E2 reader, then transpose to row dicts.
+            std::vector<std::vector<Alteryx::OpenYXDB::e2::E2Cell>> cols;
+            m_e2->ReadAllColumns(cols);
+            const auto& meta = m_e2->Schema();
+            size_t n_rows = cols.empty() ? 0 : cols[0].size();
+            for (size_t r = 0; r < n_rows; ++r) {
+                nb::dict row;
+                for (size_t f = 0; f < meta.size(); ++f) {
+                    row[nb::cast(meta[f].name)] =
+                        e2_cell_to_python(cols[f][r], meta[f].type);
+                }
+                rows.append(row);
+            }
+            return rows;
+        }
+
         int64_t n = m_db.GetNumRecords();
         if (n == 0) return rows;
         m_db.GoRecord(0);
@@ -274,6 +390,20 @@ public:
 
     // Read all records in columnar format: dict of column-name -> list of values
     nb::dict read_columns() {
+        if (m_isE2) {
+            std::vector<std::vector<Alteryx::OpenYXDB::e2::E2Cell>> cols;
+            m_e2->ReadAllColumns(cols);
+            const auto& meta = m_e2->Schema();
+            nb::dict result;
+            for (size_t f = 0; f < meta.size(); ++f) {
+                nb::list lst;
+                for (auto& c : cols[f])
+                    lst.append(e2_cell_to_python(c, meta[f].type));
+                result[nb::cast(meta[f].name)] = lst;
+            }
+            return result;
+        }
+
         int64_t n = m_db.GetNumRecords();
         size_t nFields = m_fields.size();
 
@@ -309,16 +439,14 @@ public:
     nb::dict read_columns_subset(std::optional<std::vector<std::string>> columns,
                                  int64_t offset,
                                  int64_t limit) {
-        int64_t total = m_db.GetNumRecords();
-        size_t nFields = m_fields.size();
+        size_t nFields = m_schema.size();
 
-        // Resolve projection: indices into m_fields, in requested order.
+        // Resolve projection: indices into m_schema, in requested order.
         std::vector<size_t> proj_indices;
         std::vector<std::string> proj_names;
         if (columns.has_value()) {
             proj_indices.reserve(columns->size());
             proj_names.reserve(columns->size());
-            // Build name->index map for the schema.
             std::unordered_map<std::string, size_t> by_name;
             by_name.reserve(nFields);
             for (size_t i = 0; i < nFields; ++i) {
@@ -341,6 +469,23 @@ public:
                 proj_names.push_back(m_schema[i].name);
             }
         }
+
+        if (m_isE2) {
+            std::vector<std::vector<Alteryx::OpenYXDB::e2::E2Cell>> cols;
+            int64_t off = offset < 0 ? 0 : offset;
+            m_e2->ReadColumnsSubset(proj_indices, off, limit, cols);
+            const auto& meta = m_e2->Schema();
+            nb::dict result;
+            for (size_t p = 0; p < proj_indices.size(); ++p) {
+                nb::list lst;
+                for (auto& c : cols[p])
+                    lst.append(e2_cell_to_python(c, meta[proj_indices[p]].type));
+                result[nb::cast(proj_names[p])] = lst;
+            }
+            return result;
+        }
+
+        int64_t total = m_db.GetNumRecords();
 
         // Clamp offset / limit.
         if (offset < 0) offset = 0;
@@ -566,8 +711,11 @@ NB_MODULE(_openyxdb, m) {
         });
 
     nb::class_<YXDBReader>(m, "Reader")
-        .def(nb::init<const std::string&>(), "path"_a)
+        .def(nb::init<const std::string&, bool>(),
+             "path"_a, "allow_unverified_types"_a = false)
         .def("close", &YXDBReader::close)
+        .def_prop_ro("format", &YXDBReader::format,
+                     "Detected file format: 'E1' (original) or 'E2' (AMP engine).")
         .def_prop_ro("num_records", &YXDBReader::num_records)
         .def_prop_ro("schema", &YXDBReader::schema)
         .def("read_records", &YXDBReader::read_records,

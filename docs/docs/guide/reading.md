@@ -7,6 +7,20 @@ sidebar_position: 4
 OpenYXDB provides several read paths depending on how you want to consume the
 data.
 
+:::tip Format auto-detection
+
+The reader inspects the file's magic bytes at open time and selects the right
+decoder, so all the APIs below work transparently against either on-disk
+layout (see [Format / Overview](../format/overview.md) for details). You can
+inspect which one was detected via `Reader(...).format`, which returns
+either `"E1"` (original) or `"E2"` (AMP-engine) for diagnostic purposes.
+
+Note that the newer layout uses variable-length records, so on those files
+`read_columns_subset(offset=...)` decodes sequentially from the start rather
+than seeking.
+
+:::
+
 ## High-level functions
 
 ### `to_pyarrow(path)`

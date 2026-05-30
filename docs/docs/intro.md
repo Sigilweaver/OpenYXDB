@@ -19,7 +19,10 @@ access. YXDB stores up to 17 distinct field types covering booleans, integers,
 floating-point numbers, fixed-decimal values, strings (narrow and wide, fixed
 and variable-length), dates, times, blobs, and spatial objects.
 
-This library supports **E1 (non-AMP) YXDB files only**.
+This library reads both on-disk variants of YXDB (the original layout used
+by the classic engine and the newer layout emitted by the AMP engine). The
+correct decoder is selected automatically based on the file's magic bytes.
+Writes produce the original layout.
 
 ## What changed from the Alteryx original
 

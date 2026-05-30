@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(OpenYXDB VERSION 1.3.0 LANGUAGES C CXX)
+project(OpenYXDB VERSION 1.4.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -31,6 +31,8 @@ set(LIB_SOURCES
     src/UnicodeCaseFoldingTable.cpp
     src/UnicodeCompareNoCase.cpp
     src/UTF16Traits.cpp
+    src/e2/E2Reader.cpp
+    src/e2/E2Snappy.cpp
 )
 
 set(C_SOURCES

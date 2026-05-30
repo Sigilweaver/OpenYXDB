@@ -12,6 +12,52 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - `CONTRIBUTING.md` with PR checklist and DCO.
 - README badges (CI, license, PyPI).
 
+## [1.4.0] - 2026-05-30
+
+### Added
+
+- **Dual-format read support.** The reader now auto-detects the file's
+  on-disk layout from its magic bytes and dispatches to the appropriate
+  decoder. Files written by the AMP engine -- previously rejected at open
+  time -- are now read transparently through all of the high-level paths
+  (`to_pyarrow`, `to_pandas`, `to_polars`, `scan_yxdb`, the Polars
+  `DataFrame.yxdb` namespace, the DuckDB helpers, and `Reader`).
+- **`Reader.format`** -- new read-only property that returns `"E1"` for the
+  original layout or `"E2"` for the AMP-engine layout. Intended for
+  diagnostics.
+- **`Reader(path, allow_unverified_types=False)`** -- new optional flag.
+  When `True`, decoding tolerates field types that have not been exercised
+  against the project's corpus. Off by default.
+- Vendored a small Snappy raw-block decoder (`src/e2/E2Snappy.cpp`) so the
+  new read path adds no external compression dependencies and remains
+  consistent with the existing in-tree LZF policy.
+- New tests:
+    - `test/test_e2_snappy.cpp` -- canned-vector coverage of the vendored
+      Snappy decoder (literals, copy-1, copy-2, overlapping copies,
+      multi-byte length prefixes, truncation handling).
+    - `test/test_e2_header.cpp` -- magic-byte sniff and field-type-name
+      roundtrip.
+    - `tests/test_e2.py` -- corpus-driven smoke tests for auto-detection,
+      lazy `num_records`, projection, offset/limit windowing, and
+      end-to-end `to_polars`.
+
+### Changed
+
+- Documentation refreshed to reflect dual-format read support:
+  `README.md`, `docs/docs/intro.md`, `docs/docs/format/overview.md` (new
+  "Newer variant" section), and the reading / writing guides.
+- Writes continue to produce the original layout. Round-tripping a file
+  written by the AMP engine through OpenYXDB will rewrite it in the
+  original layout; the data itself is preserved.
+
+### Notes
+
+- Random access by record index is not supported on the newer layout
+  because records are variable-length;
+  `Reader.read_columns_subset(offset=..., limit=...)` decodes sequentially
+  from the start. `num_records` is computed lazily (and cached) on first
+  access by walking the file's compressed record blocks.
+
 ## [1.3.0] - 2026-04-21
 
 ### Added

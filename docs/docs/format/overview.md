@@ -10,8 +10,11 @@ implemented by this library.
 
 :::note Format scope
 
-This documentation covers **E1 (non-AMP) YXDB files** only. AMP (multi-threaded)
-YXDB files produced by Alteryx Server are not supported.
+YXDB files come in two on-disk layouts produced by different Alteryx engine
+generations. This page focuses on the original layout, which is what
+`openyxdb.Writer` emits. The reader auto-detects the variant at open time and
+can decode both -- see [Newer variant](#newer-variant) below for a sketch of
+the alternative layout.
 
 :::
 
@@ -112,3 +115,28 @@ block index.
 | DateTime | 19-byte ASCII `YYYY-MM-DD HH:MM:SS` + 1 null-flag byte |
 | Blob | 4-byte length prefix + variable-length bytes (0 = null) |
 | SpatialObj | 4-byte length prefix + SHP-encoded bytes (0 = null) |
+
+## Newer variant
+
+A second on-disk layout is emitted by the AMP engine. The reader auto-detects
+this variant by sniffing the file's magic bytes and dispatches to a separate
+decoder. The high-level differences are:
+
+- The header is a fixed 100-byte block carrying its own magic prefix, a file
+  identifier and a size field for the metadata that follows.
+- Metadata is stored as **UTF-8 XML** (rather than UTF-16LE) and is parsed
+  with the same `<RecordInfo>` / `<Field>` shape used above.
+- The record body is a stream of typed blocks. Each block begins with a single
+  type byte identifying it as a blob block, a record block, or a spatial-index
+  block. Record blocks are compressed with **raw Snappy** (preceded by a small
+  framing marker) rather than LZF.
+- Within a record block, fields use a **compact variable-length encoding**:
+  each value carries a 1-byte type tag, with dedicated tag values for null and
+  for special-cased shortcuts (for example, a single byte encodes a zero
+  double). String, blob and spatial values may reference shared blob blocks by
+  offset rather than being inlined.
+- Because records are variable-length, random access by record index is not
+  supported on this variant; `read_columns_subset(offset, limit)` decodes
+  sequentially from the start of the file.
+
+Writes always produce the original layout described above.

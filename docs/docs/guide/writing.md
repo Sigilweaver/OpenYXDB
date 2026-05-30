@@ -6,6 +6,16 @@ sidebar_position: 5
 
 OpenYXDB provides symmetric write paths for every read path.
 
+:::note Output format
+
+All write paths produce the original on-disk layout (see
+[Format / Overview](../format/overview.md)). The AMP-engine variant is
+read-only -- if you round-trip a file written by the AMP engine through
+OpenYXDB, the rewritten file will use the original layout. The data itself
+is preserved.
+
+:::
+
 ## High-level functions
 
 ### `from_pyarrow(table, path, chunk_size=None)`

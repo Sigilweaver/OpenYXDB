@@ -19,9 +19,13 @@ Built on [Alteryx's official open-source YXDB implementation](https://github.com
 
 ## What is YXDB?
 
-YXDB is the native binary format used by Alteryx Designer. It is row-oriented: each file contains UTF-16 XML metadata describing the schema, followed by LZF-compressed blocks of records, and a block index at the end for random access.
+YXDB is the native binary format used by Alteryx Designer. Two on-disk layouts
+are in active use: the original format used by the classic engine and a newer
+columnar-friendly variant emitted by the AMP engine.
 
-This library supports **E1 (non-AMP) YXDB files only**.
+This library reads both layouts automatically -- the file's magic bytes are
+sniffed at open time and the appropriate decoder is selected. New files written
+through `openyxdb.Writer` use the original format.
 
 ## Install
 
