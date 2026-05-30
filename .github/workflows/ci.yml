@@ -41,3 +41,18 @@ jobs:
 
       - name: Run Python tests
         run: pixi run test-python
+
+  docs:
+    name: Docs (Docusaurus)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: docs
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - name: bun install
+        run: bun install --frozen-lockfile
+      - name: bun run build:cloudflare
+        run: bun run build:cloudflare
+
