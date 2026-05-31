@@ -6,11 +6,20 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [1.4.1] - 2026-05-31
+
 ### Added
 
+- `CITATION.cff`: author identity (Nathan Riley + ORCID) and a
+  scaffolded `identifiers:` block ready for the Zenodo concept DOI.
 - `SECURITY.md` with private GHSA reporting policy.
 - `CONTRIBUTING.md` with PR checklist and DCO.
 - README badges (CI, license, PyPI).
+
+### Changed
+
+- CI: pixi bumped to v0.69.0 to support lock file version 7.
+- README badge block unified across the Sigilweaver portfolio.
 
 ## [1.4.0] - 2026-05-30
 
