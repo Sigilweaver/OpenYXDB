@@ -1,6 +1,7 @@
 # OpenYXDB
 
 [![CI](https://github.com/Sigilweaver/OpenYXDB/actions/workflows/ci.yml/badge.svg)](https://github.com/Sigilweaver/OpenYXDB/actions/workflows/ci.yml)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.20470611.svg)](https://doi.org/10.5281/zenodo.20470611)
 [![PyPI](https://img.shields.io/pypi/v/openyxdb.svg)](https://pypi.org/project/openyxdb/)
 [![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-blue.svg)](LICENSE)
 [![Docs](https://img.shields.io/badge/docs-sigilweaver.app-blue.svg)](https://sigilweaver.app/openyxdb/docs/)
