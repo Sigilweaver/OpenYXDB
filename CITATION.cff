@@ -1,0 +1,37 @@
+cff-version: 1.2.0
+title: "OpenYXDB: A reader and writer for Alteryx YXDB files"
+message: >
+  If you use OpenYXDB in your research, please cite it using the metadata
+  below. Citation is encouraged and appreciated but not legally required.
+type: software
+authors:
+  - family-names: Riley
+    given-names: Nathan
+    orcid: "https://orcid.org/0009-0004-1579-7312"
+    website: "https://github.com/Sigilweaver"
+repository-code: "https://github.com/Sigilweaver/OpenYXDB"
+url: "https://sigilweaver.app"
+abstract: >
+  OpenYXDB is a standalone, cross-platform reader and writer for Alteryx
+  YXDB files, distributed as a Python package with first-class Polars,
+  PyArrow, and Pandas integration. No native Alteryx Designer installation
+  is required.
+license: "Apache-2.0"
+license-url: "https://github.com/Sigilweaver/OpenYXDB/blob/main/LICENSE"
+date-released: "2026-05-31"
+version: "1.4.0"
+keywords:
+  - YXDB
+  - Alteryx
+  - data engineering
+  - ETL
+  - file format
+  - Polars
+  - Apache Arrow
+  - Python
+# Zenodo DOI - filled in after first GitHub-triggered Zenodo release.
+# After Zenodo mints the concept DOI, uncomment and replace the value below:
+# identifiers:
+#   - type: doi
+#     value: "10.5281/zenodo.XXXXXXXX"
+#     description: "Concept DOI (all versions) - Zenodo"
