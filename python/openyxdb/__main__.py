@@ -1,4 +1,4 @@
-"""python -m openyxdb — show package help and version info."""
+"""python -m openyxdb - show package help and version info."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ import sys
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="python -m openyxdb",
-        description="OpenYXDB — Read and write Alteryx YXDB files from Python.",
+        description="OpenYXDB - Read and write Alteryx YXDB files from Python.",
     )
     parser.add_argument(
         "--version", action="store_true", help="Print the package version and exit."
@@ -33,7 +33,7 @@ def main(argv: list[str] | None = None) -> None:
 
 def _print_help() -> None:
     help_text = """\
-OpenYXDB — Read and write Alteryx YXDB files from Python.
+OpenYXDB - Read and write Alteryx YXDB files from Python.
 
 Quick start:
   import openyxdb
@@ -74,7 +74,7 @@ Polars integration (automatic on import):
   df = pl.read_yxdb("data.yxdb")       # eager
   lf = pl.scan_yxdb("data.yxdb")       # lazy w/ projection + row-limit pushdown
   df.yxdb.write("out.yxdb")            # namespace
-  lf.yxdb.sink("out.yxdb")             # namespace — chunked streaming write
+  lf.yxdb.sink("out.yxdb")             # namespace - chunked streaming write
 
 Supported field types:
   Bool, Byte, Int16, Int32, Int64, FixedDecimal, Float, Double,

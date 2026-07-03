@@ -631,10 +631,10 @@ def register_polars() -> None:
 
     After calling this (or after ``import openyxdb``):
 
-    - ``pl.read_yxdb(path)`` — eager read, returns DataFrame
-    - ``pl.scan_yxdb(path)`` — lazy scan, returns LazyFrame
-    - ``df.yxdb.write(path)`` — write a DataFrame to YXDB
-    - ``lf.yxdb.sink(path)`` — collect a LazyFrame and write to YXDB
+    - ``pl.read_yxdb(path)`` - eager read, returns DataFrame
+    - ``pl.scan_yxdb(path)`` - lazy scan, returns LazyFrame
+    - ``df.yxdb.write(path)`` - write a DataFrame to YXDB
+    - ``lf.yxdb.sink(path)`` - collect a LazyFrame and write to YXDB
     """
     try:
         import polars as pl

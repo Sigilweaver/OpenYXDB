@@ -108,7 +108,7 @@ def test_scan_offset_via_skip_matches() -> None:
 
 
 def test_head_is_near_constant_time() -> None:
-    """``head(k)`` must not scale with file size — row-limit pushdown works."""
+    """``head(k)`` must not scale with file size - row-limit pushdown works."""
     # Use the largest file in the corpus as the stress case.
     largest = max(ALL_FILES, key=lambda p: p.stat().st_size)
     size_mb = largest.stat().st_size / 1e6
@@ -168,7 +168,7 @@ def test_unknown_projection_column_raises() -> None:
 # Streaming sink + DuckDB corpus coverage
 # --------------------------------------------------------------------------- #
 
-# A smaller sample is used for roundtrip tests — we don't need to rewrite
+# A smaller sample is used for roundtrip tests - we don't need to rewrite
 # every file, just confirm the streaming sink and DuckDB helpers handle the
 # full diversity of schemas the corpus provides.
 _ROUNDTRIP_SAMPLE = ALL_FILES[:: max(1, len(ALL_FILES) // 25)][:25]

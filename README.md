@@ -62,10 +62,10 @@ Importing `openyxdb` automatically monkey-patches `polars` with YXDB support (no
 import polars as pl
 import openyxdb  # registers everything on import
 
-# Eager read — returns a DataFrame
+# Eager read - returns a DataFrame
 df = pl.read_yxdb("data.yxdb")
 
-# Lazy scan — returns a LazyFrame with projection & predicate pushdown
+# Lazy scan - returns a LazyFrame with projection & predicate pushdown
 lf = pl.scan_yxdb("data.yxdb")
 df = lf.select("col_a", "col_b").filter(pl.col("col_a") > 10).collect()
 ```
@@ -150,7 +150,7 @@ pixi run test
 
 ## Testing
 
-The reader has been validated against **1,012 real-world E1 YXDB files** sourced from the community corpus at [Sigilweaver/YXDB-Sources](https://github.com/Sigilweaver/YXDB-Sources), covering a wide range of field types, encodings, record counts (0 to 200k+), and filenames including non-ASCII characters — **100% pass rate**.
+The reader has been validated against **1,012 real-world E1 YXDB files** sourced from the community corpus at [Sigilweaver/YXDB-Sources](https://github.com/Sigilweaver/YXDB-Sources), covering a wide range of field types, encodings, record counts (0 to 200k+), and filenames including non-ASCII characters - **100% pass rate**.
 
 The 1.3.0 streaming sink (`sink_yxdb`) and DuckDB round-trip paths are exercised against a sampled 25-file subset of the corpus in addition to the per-feature unit tests. Full Python suite: **1,040 passed**.
 
