@@ -6,6 +6,13 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [1.4.2] - 2026-07-06
+
+### Changed
+
+- PyPI package now declares `keywords` (`alteryx`, `yxdb`, `arrow`,
+  `polars`, `pandas`, `duckdb`) for better PyPI search discoverability.
+
 ## [1.4.1] - 2026-05-31
 
 ### Added
