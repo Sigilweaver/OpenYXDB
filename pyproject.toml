@@ -4,7 +4,7 @@ build-backend = "scikit_build_core.build"
 
 [project]
 name = "openyxdb"
-version = "1.4.2"
+version = "1.4.3"
 description = "Read and write Alteryx YXDB files"
 keywords = ["alteryx", "yxdb", "arrow", "polars", "pandas", "duckdb"]
 readme = "README.md"

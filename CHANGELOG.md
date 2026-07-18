@@ -6,6 +6,20 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [1.4.3] - 2026-07-18
+
+### Fixed
+
+- E2 (AMP-engine) reader now opens files through the wide-path Windows
+  API (`_wopen`), matching the E1 reader. The previous narrow `_open`
+  call went through the ANSI codepage and the legacy 260-char
+  `MAX_PATH` limit, so it could fail to open UNC shares or `\\?\`
+  long-path-escaped paths on Windows.
+- The Python E2-format sniff check (`is_e2_file`) had the same narrow-
+  path issue via `std::fopen`, which could silently mis-route a real
+  E2 file on a UNC/long path to the E1 reader and produce a
+  misleading wrong-format error. Switched to `_wfopen`.
+
 ## [1.4.2] - 2026-07-06
 
 ### Changed
