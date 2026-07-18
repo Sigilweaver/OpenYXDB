@@ -30,13 +30,11 @@
 
 #if defined(_WIN32)
     #include <io.h>
-    #define OPEN_RD ::_open
     #define READ ::_read
     #define CLOSE ::_close
     #define LSEEK ::_lseeki64
 #else
     #include <unistd.h>
-    #define OPEN_RD ::open
     #define READ ::read
     #define CLOSE ::close
     #define LSEEK ::lseek
@@ -539,6 +537,60 @@ E2Cell DecodeBlobOrSpatial(const uint8_t* p, size_t len, size_t* consumed,
 //                                 Impl
 // ===========================================================================
 
+#if defined(_WIN32)
+// _open() takes a narrow, ANSI-codepage path and is limited to the legacy
+// MAX_PATH (260 char) path length, so it can't reliably reach UNC shares
+// (\\server\share\...) or \\?\ long-path-escaped paths. _wopen() with a
+// UTF-16 path goes through CreateFileW instead, avoiding both limitations;
+// this mirrors the E1 reader's approach in Open_AlteryxYXDB.cpp.
+std::wstring Utf8PathToWide(const std::string& utf8) {
+    std::wstring result;
+    size_t i = 0;
+    while (i < utf8.size()) {
+        uint32_t cp;
+        unsigned char c = static_cast<unsigned char>(utf8[i]);
+        if (c < 0x80) {
+            cp = c;
+            i += 1;
+        } else if ((c & 0xE0) == 0xC0 && i + 1 < utf8.size()) {
+            cp = static_cast<uint32_t>(c & 0x1F) << 6
+               | (static_cast<unsigned char>(utf8[i + 1]) & 0x3F);
+            i += 2;
+        } else if ((c & 0xF0) == 0xE0 && i + 2 < utf8.size()) {
+            cp = static_cast<uint32_t>(c & 0x0F) << 12
+               | (static_cast<uint32_t>(static_cast<unsigned char>(utf8[i + 1]) & 0x3F) << 6)
+               | (static_cast<unsigned char>(utf8[i + 2]) & 0x3F);
+            i += 3;
+        } else if ((c & 0xF8) == 0xF0 && i + 3 < utf8.size()) {
+            cp = static_cast<uint32_t>(c & 0x07) << 18
+               | (static_cast<uint32_t>(static_cast<unsigned char>(utf8[i + 1]) & 0x3F) << 12)
+               | (static_cast<uint32_t>(static_cast<unsigned char>(utf8[i + 2]) & 0x3F) << 6)
+               | (static_cast<unsigned char>(utf8[i + 3]) & 0x3F);
+            i += 4;
+        } else {
+            cp = 0xFFFD;  // replacement character for invalid sequences
+            i += 1;
+        }
+        if (cp <= 0xFFFF) {
+            result.push_back(static_cast<wchar_t>(cp));
+        } else {
+            cp -= 0x10000;
+            result.push_back(static_cast<wchar_t>(0xD800 + (cp >> 10)));
+            result.push_back(static_cast<wchar_t>(0xDC00 + (cp & 0x3FF)));
+        }
+    }
+    return result;
+}
+
+int OpenPathForRead(const std::string& utf8Path, int flags) {
+    return ::_wopen(Utf8PathToWide(utf8Path).c_str(), flags);
+}
+#else
+int OpenPathForRead(const std::string& utf8Path, int flags) {
+    return ::open(utf8Path.c_str(), flags);
+}
+#endif
+
 class FileReader {
 public:
     int fd{-1};
@@ -547,7 +599,7 @@ public:
 
     ~FileReader() { if (fd >= 0) CLOSE(fd); }
     void Open(const std::string& path) {
-        fd = OPEN_RD(path.c_str(), O_RDONLY | O_BINARY);
+        fd = OpenPathForRead(path, O_RDONLY | O_BINARY);
         if (fd < 0) Fail("E2: cannot open file: " + path);
         struct stat st{};
         if (fstat(fd, &st) != 0) Fail("E2: stat failed");

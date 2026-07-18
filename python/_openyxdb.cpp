@@ -265,7 +265,17 @@ static nb::object e2_cell_to_python(const Alteryx::OpenYXDB::e2::E2Cell& c,
 // (AMP-engine) YXDB. Reads up to 24 bytes; missing file -> false (the E1
 // open path will produce the proper "cannot open" error).
 static bool is_e2_file(const std::string& path) {
+#ifdef _WIN32
+    // std::fopen() takes a narrow, ANSI-codepage path here and is limited to
+    // the legacy MAX_PATH (260 char) length, so it can silently fail to open
+    // a UNC or \\?\ long path that the wide-path E1/E2 openers can handle.
+    // That would make an actual E2 file look "not found" here and get
+    // mis-routed to the E1 reader, which then fails with a confusing
+    // wrong-format error. _wfopen() with the UTF-16 path avoids that.
+    FILE* fp = _wfopen(utf8_to_wstring(path), L"rb");
+#else
     FILE* fp = std::fopen(path.c_str(), "rb");
+#endif
     if (!fp) return false;
     uint8_t buf[Alteryx::OpenYXDB::e2::E2_MAGIC_PREFIX_LEN];
     size_t got = std::fread(buf, 1, sizeof(buf), fp);
