@@ -65,12 +65,19 @@ jobs:
         # scikit-build-core's default CMake generator selection on Windows
         # guesses a Visual Studio version by name, which can mismatch
         # whatever VS version is actually on the runner and fail configure.
-        # Force Ninja for this CI job only (scoped via env, not
+        # Force Ninja for this CI job only via CMAKE_ARGS (not
         # pyproject.toml's cmake.args, since that file also drives
         # publish.yml's cibuildwheel build - forcing Ninja there changed the
         # wheel's extension-module DLL layout and broke import at runtime).
+        # CMAKE_ARGS passes -GNinja straight through to cmake's own CLI, the
+        # same way test-cpp's pixi task already does above - this avoids
+        # going through the CMAKE_GENERATOR env var, which pixi's win-64
+        # cxx-compiler activation script also partially populates (it
+        # unconditionally sets CMAKE_GENERATOR_PLATFORM=x64 alongside it),
+        # which conflicts with Ninja ("does not support platform
+        # specification").
         env:
-          CMAKE_GENERATOR: Ninja
+          CMAKE_ARGS: -GNinja
         run: pixi run test-python
 
   docs:
