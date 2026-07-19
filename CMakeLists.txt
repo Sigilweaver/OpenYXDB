@@ -123,6 +123,15 @@ if(OPENYXDB_BUILD_TESTS)
     add_executable(openyxdb_example test/main.cpp)
     target_include_directories(openyxdb_example PRIVATE ${CMAKE_SOURCE_DIR}/include)
     target_compile_definitions(openyxdb_example PRIVATE UNICODE NOMINMAX)
+    # openyxdb's headers gate __declspec(dllimport) on Windows behind
+    # BUILDING_OPEN_ALTERYX/OPEN_ALTERYX_EXPORTS (see include/Open_AlteryxYXDB.h
+    # and friends). When OPENYXDB_BUILD_PYTHON is ON, openyxdb is a STATIC
+    # library, so consumers must NOT see dllimport either - mirror the same
+    # define the library target and the nanobind module already use, or MSVC
+    # emits LNK2019 unresolved externals for every exported symbol.
+    if(OPENYXDB_BUILD_PYTHON)
+        target_compile_definitions(openyxdb_example PRIVATE BUILDING_OPEN_ALTERYX)
+    endif()
     target_link_libraries(openyxdb_example PRIVATE openyxdb)
 
     add_test(NAME example_roundtrip COMMAND openyxdb_example)
@@ -135,6 +144,9 @@ if(OPENYXDB_BUILD_TESTS)
             add_executable(openyxdb_tests ${TEST_SOURCES})
             target_include_directories(openyxdb_tests PRIVATE ${CMAKE_SOURCE_DIR}/include)
             target_compile_definitions(openyxdb_tests PRIVATE UNICODE NOMINMAX)
+            if(OPENYXDB_BUILD_PYTHON)
+                target_compile_definitions(openyxdb_tests PRIVATE BUILDING_OPEN_ALTERYX)
+            endif()
             target_link_libraries(openyxdb_tests PRIVATE openyxdb Catch2::Catch2WithMain)
 
             include(Catch)
