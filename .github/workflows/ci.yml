@@ -62,6 +62,15 @@ jobs:
           cache: true
 
       - name: Run Python tests
+        # scikit-build-core's default CMake generator selection on Windows
+        # guesses a Visual Studio version by name, which can mismatch
+        # whatever VS version is actually on the runner and fail configure.
+        # Force Ninja for this CI job only (scoped via env, not
+        # pyproject.toml's cmake.args, since that file also drives
+        # publish.yml's cibuildwheel build - forcing Ninja there changed the
+        # wheel's extension-module DLL layout and broke import at runtime).
+        env:
+          CMAKE_GENERATOR: Ninja
         run: pixi run test-python
 
   docs:
