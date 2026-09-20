@@ -223,6 +223,8 @@ static nb::object e2_cell_to_python(const Alteryx::OpenYXDB::e2::E2Cell& c,
     using K = Alteryx::OpenYXDB::e2::E2Cell::Kind;
     using FT = Alteryx::OpenYXDB::e2::E2FieldType;
     if (c.kind == K::Null) return nb::none();
+    if (c.kind == K::Reference)
+        throw std::runtime_error("E2: unresolved reference reached Python conversion");
     switch (ft) {
         case FT::Bool:
             if (c.kind == K::Bool) return nb::cast(c.boolean);
@@ -536,6 +538,9 @@ class YXDBWriter {
     SmartPointerRefObj<Record> m_record;
     std::vector<const FieldBase*> m_fields;
     std::vector<std::string> m_fieldNames;
+    // Python str objects for m_fieldNames, built once so the per-record write
+    // loop can look up dict entries without allocating a key each time.
+    std::vector<nb::str> m_fieldKeys;
     bool m_open = false;
 
     void build_schema_xml(const std::vector<FieldInfo>& schema, WString& xml) {
@@ -572,10 +577,13 @@ public:
         unsigned nFields = m_db.m_recordInfo.NumFields();
         m_fields.reserve(nFields);
         m_fieldNames.reserve(nFields);
+        m_fieldKeys.reserve(nFields);
         for (unsigned i = 0; i < nFields; ++i) {
             const FieldBase* f = m_db.m_recordInfo[i];
             m_fields.push_back(f);
             m_fieldNames.push_back(wstring_to_utf8(WString(f->GetFieldName().c_str())));
+            m_fieldKeys.emplace_back(m_fieldNames.back().c_str(),
+                                     m_fieldNames.back().size());
         }
         m_record = m_db.m_recordInfo.CreateRecord();
     }
@@ -594,7 +602,7 @@ public:
         rec->Reset();
         for (size_t i = 0; i < m_fields.size(); ++i) {
             const FieldBase* field = m_fields[i];
-            nb::str key(m_fieldNames[i].c_str(), m_fieldNames[i].size());
+            const nb::str& key = m_fieldKeys[i];
             if (!row.contains(key)) {
                 field->SetNull(rec);
                 continue;
@@ -610,26 +618,47 @@ public:
     }
 
     void write_columns(const nb::dict& columns) {
-        // Determine row count from first column
         if (m_fields.empty()) return;
+        size_t nFields = m_fields.size();
 
-        nb::str first_key(m_fieldNames[0].c_str(), m_fieldNames[0].size());
-        if (!columns.contains(first_key)) return;
-        nb::list first_col = nb::cast<nb::list>(columns[first_key]);
-        size_t n = nb::len(first_col);
+        // Resolve every field's column once. Fields absent from `columns` get
+        // a null entry and are written as NULL for every record.
+        std::vector<bool> present(nFields, false);
+        std::vector<nb::list> cols(nFields);
+        for (size_t f = 0; f < nFields; ++f) {
+            if (!columns.contains(m_fieldKeys[f])) continue;
+            cols[f] = nb::cast<nb::list>(columns[m_fieldKeys[f]]);
+            present[f] = true;
+        }
+
+        // The first field present in `columns` sets the record count; the rest
+        // must agree so every record has a value for each supplied column.
+        size_t n = 0;
+        bool have_n = false;
+        for (size_t f = 0; f < nFields; ++f) {
+            if (!present[f]) continue;
+            size_t len = nb::len(cols[f]);
+            if (!have_n) {
+                n = len;
+                have_n = true;
+            } else if (len != n) {
+                throw std::invalid_argument(
+                    "column '" + m_fieldNames[f] + "' has " + std::to_string(len)
+                    + " values but " + std::to_string(n) + " were expected");
+            }
+        }
+        if (!have_n) return;
 
         Record* rec = m_record.Get();
         for (size_t row = 0; row < n; ++row) {
             rec->Reset();
-            for (size_t f = 0; f < m_fields.size(); ++f) {
+            for (size_t f = 0; f < nFields; ++f) {
                 const FieldBase* field = m_fields[f];
-                nb::str key(m_fieldNames[f].c_str(), m_fieldNames[f].size());
-                if (!columns.contains(key)) {
+                if (!present[f]) {
                     field->SetNull(rec);
                     continue;
                 }
-                nb::list col = nb::cast<nb::list>(columns[key]);
-                nb::object val = col[row];
+                nb::object val = cols[f][row];
                 if (val.is_none()) {
                     field->SetNull(rec);
                     continue;

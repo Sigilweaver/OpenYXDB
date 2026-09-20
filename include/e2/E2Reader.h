@@ -69,6 +69,7 @@ struct E2Cell {
         // matching how E1 surfaces these to Python (ISO strings).
         Text,
         Bytes,    // Blob, SpatialObj
+        Reference,  // Internal unresolved E2 blob/string reference
     };
     Kind kind{Kind::Null};
     bool boolean{false};
@@ -76,6 +77,7 @@ struct E2Cell {
     double real{0.0};
     std::string text;
     std::vector<uint8_t> bytes;
+    uint8_t referenceTag{0};
 
     static E2Cell MakeNull() { return E2Cell{}; }
     static E2Cell MakeBool(bool v) { E2Cell c; c.kind = Kind::Bool; c.boolean = v; return c; }
@@ -83,6 +85,13 @@ struct E2Cell {
     static E2Cell MakeDouble(double v) { E2Cell c; c.kind = Kind::Double; c.real = v; return c; }
     static E2Cell MakeText(std::string v) { E2Cell c; c.kind = Kind::Text; c.text = std::move(v); return c; }
     static E2Cell MakeBytes(std::vector<uint8_t> v) { E2Cell c; c.kind = Kind::Bytes; c.bytes = std::move(v); return c; }
+    static E2Cell MakeReference(uint8_t tag, std::vector<uint8_t> payload) {
+        E2Cell c;
+        c.kind = Kind::Reference;
+        c.referenceTag = tag;
+        c.bytes = std::move(payload);
+        return c;
+    }
 };
 
 // File-format magic, exposed for the dispatcher in the Python binding.
@@ -134,7 +143,9 @@ private:
 
     std::vector<E2FieldMeta> m_schema;
     std::string m_metaXml;
-    int64_t m_recordCount{0};
+    // -1 until the record count has been computed by NumRecords() or a
+    // full (unlimited) ReadColumnsSubset pass.
+    int64_t m_recordCount{-1};
     bool m_allowUnverified{false};
 };
 

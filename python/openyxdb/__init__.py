@@ -7,12 +7,14 @@ PyArrow Tables, Pandas DataFrames, and Polars DataFrames.
 from __future__ import annotations
 
 import os
+from collections import Counter
 from pathlib import Path
 from typing import Any
 
 from openyxdb._openyxdb import FieldInfo, Reader, Writer
 
 __all__ = [
+    "DEFAULT_WRITE_CHUNK_SIZE",
     "FieldInfo",
     "Reader",
     "Writer",
@@ -204,45 +206,68 @@ def _infer_schema(columns: dict[str, list[Any]]) -> list[FieldInfo]:
 # --------------------------------------------------------------------------- #
 
 
+def _column_to_arrow(fi: FieldInfo, col_data: list, pa):
+    """Convert one decoded YXDB column to a PyArrow array.
+
+    Date/Time/DateTime fields are surfaced by the reader as ISO strings and are
+    parsed here into the temporal type declared by :func:`_yxdb_type_to_arrow`.
+    """
+    arrow_type = _yxdb_type_to_arrow(fi)
+
+    if fi.type == "Date":
+        import datetime
+
+        col_data = [
+            datetime.date.fromisoformat(v) if v is not None else None
+            for v in col_data
+        ]
+    elif fi.type == "Time":
+        import datetime
+
+        col_data = [
+            datetime.time.fromisoformat(v) if v is not None else None
+            for v in col_data
+        ]
+    elif fi.type == "DateTime":
+        import datetime
+
+        col_data = [
+            datetime.datetime.fromisoformat(v) if v is not None else None
+            for v in col_data
+        ]
+
+    return pa.array(col_data, type=arrow_type)
+
+
 def to_pyarrow(path: str | os.PathLike):
-    """Read a YXDB file and return a PyArrow Table."""
+    """Read a YXDB file and return a PyArrow Table.
+
+    The whole file is decoded to Python objects up front, so peak memory
+    scales with the file's cell count; :func:`scan_yxdb` reads in bounded
+    batches instead. Each column is released here as soon as its Arrow array
+    is built, so the conversion itself adds little on top of that.
+    """
     import pyarrow as pa
 
     with Reader(str(path)) as r:
         schema_info = r.schema
         columns = r.read_columns()
 
+    # Columns are keyed by name, so fields sharing a name share one entry.
+    # Track how many fields still read each name and release the decoded data
+    # only once the last of them has been converted.
+    pending = Counter(fi.name for fi in schema_info)
+
     fields = []
     arrays = []
     for fi in schema_info:
-        arrow_type = _yxdb_type_to_arrow(fi)
-        col_data = list(columns[fi.name])
-
-        # Convert date/time strings to proper types
-        if fi.type == "Date":
-            import datetime
-
-            col_data = [
-                datetime.date.fromisoformat(v) if v is not None else None
-                for v in col_data
-            ]
-        elif fi.type == "Time":
-            import datetime
-
-            col_data = [
-                datetime.time.fromisoformat(v) if v is not None else None
-                for v in col_data
-            ]
-        elif fi.type == "DateTime":
-            import datetime
-
-            col_data = [
-                datetime.datetime.fromisoformat(v) if v is not None else None
-                for v in col_data
-            ]
-
-        fields.append(pa.field(fi.name, arrow_type))
-        arrays.append(pa.array(col_data, type=arrow_type))
+        pending[fi.name] -= 1
+        col_data = (
+            columns.pop(fi.name) if pending[fi.name] == 0 else columns[fi.name]
+        )
+        fields.append(pa.field(fi.name, _yxdb_type_to_arrow(fi)))
+        arrays.append(_column_to_arrow(fi, col_data, pa))
+        del col_data
 
     return pa.table(arrays, schema=pa.schema(fields))
 
@@ -275,6 +300,14 @@ def _arrow_batch_to_columns(batch, yxdb_schema: list[FieldInfo]) -> dict[str, li
     return columns
 
 
+DEFAULT_WRITE_CHUNK_SIZE = 65_536
+"""Rows per batch used by the ``from_*`` writers when no ``chunk_size`` is given.
+
+Each batch is converted to Python objects before being written, so this bounds
+how much of the input is materialised at once.
+"""
+
+
 def from_pyarrow(
     table,
     path: str | os.PathLike,
@@ -282,12 +315,15 @@ def from_pyarrow(
 ) -> None:
     """Write a PyArrow Table to a YXDB file.
 
-    If ``chunk_size`` is provided, the table is written in batches of that
-    many rows, which reduces peak Python memory on very large tables.
+    The table is written in batches of ``chunk_size`` rows, defaulting to
+    :data:`DEFAULT_WRITE_CHUNK_SIZE`. Pass ``chunk_size=0`` to convert and
+    write the whole table in one pass.
     """
+    if chunk_size is None:
+        chunk_size = DEFAULT_WRITE_CHUNK_SIZE
     schema = _arrow_schema_to_yxdb(table.schema)
     with Writer(str(path), schema) as w:
-        if chunk_size and chunk_size > 0:
+        if chunk_size > 0:
             for batch in table.to_batches(max_chunksize=chunk_size):
                 w.write_columns(_arrow_batch_to_columns(batch, schema))
         else:
@@ -310,7 +346,8 @@ def to_pandas(path: str | os.PathLike):
 def from_pandas(df, path: str | os.PathLike, chunk_size: int | None = None) -> None:
     """Write a Pandas DataFrame to a YXDB file.
 
-    If ``chunk_size`` is provided, rows are written in batches of that size.
+    Rows are written in batches of ``chunk_size``, defaulting to
+    :data:`DEFAULT_WRITE_CHUNK_SIZE`.
     """
     import pyarrow as pa
 
@@ -484,8 +521,8 @@ def scan_yxdb(path: str | os.PathLike) -> "pl.LazyFrame":
 def from_polars(df, path: str | os.PathLike, chunk_size: int | None = None) -> None:
     """Write a Polars DataFrame to a YXDB file.
 
-    If ``chunk_size`` is provided, the DataFrame is written to the underlying
-    YXDB writer in batches of that many rows.
+    The DataFrame is written to the underlying YXDB writer in batches of
+    ``chunk_size`` rows, defaulting to :data:`DEFAULT_WRITE_CHUNK_SIZE`.
     """
     table = df.to_arrow()
     from_pyarrow(table, path, chunk_size=chunk_size)
@@ -495,7 +532,7 @@ def sink_yxdb(
     lf,
     path: str | os.PathLike,
     *,
-    chunk_size: int = 65_536,
+    chunk_size: int = DEFAULT_WRITE_CHUNK_SIZE,
     engine: str = "streaming",
 ) -> None:
     """Execute a Polars LazyFrame and stream the result to a YXDB file.
@@ -664,7 +701,7 @@ def register_polars() -> None:
                 self,
                 path: str | os.PathLike,
                 *,
-                chunk_size: int = 65_536,
+                chunk_size: int = DEFAULT_WRITE_CHUNK_SIZE,
                 engine: str = "streaming",
             ) -> None:
                 """Execute this LazyFrame on the streaming engine and

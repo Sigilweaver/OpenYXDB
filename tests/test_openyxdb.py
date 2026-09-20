@@ -598,3 +598,152 @@ class TestDuckDB:
         out = openyxdb.read_yxdb(out_path)
         assert list(out["id"]) == [1, 2]
         assert [round(v, 1) for v in out["score"]] == [9.5, 8.1]
+
+
+# --------------------------------------------------------------------------- #
+# Columnar writes
+# --------------------------------------------------------------------------- #
+
+
+def _schema(*specs) -> list:
+    """Build a schema from ``(name, type, size)`` triples."""
+    out = []
+    for name, type_name, size in specs:
+        fi = FieldInfo()
+        fi.name = name
+        fi.type = type_name
+        fi.size = size
+        fi.scale = 0
+        out.append(fi)
+    return out
+
+
+class TestWriteColumns:
+    def test_writes_every_row(self, tmp_yxdb):
+        schema = _schema(("id", "Int32", 4), ("name", "V_String", 32))
+        with Writer(tmp_yxdb, schema) as w:
+            w.write_columns({"id": [1, 2, 3], "name": ["a", "b", "c"]})
+
+        cols = openyxdb.read_yxdb(tmp_yxdb)
+        assert list(cols["id"]) == [1, 2, 3]
+        assert list(cols["name"]) == ["a", "b", "c"]
+
+    def test_nulls_are_preserved(self, tmp_yxdb):
+        schema = _schema(("id", "Int32", 4), ("name", "V_String", 32))
+        with Writer(tmp_yxdb, schema) as w:
+            w.write_columns({"id": [1, None, 3], "name": [None, "b", None]})
+
+        cols = openyxdb.read_yxdb(tmp_yxdb)
+        assert list(cols["id"]) == [1, None, 3]
+        assert list(cols["name"]) == [None, "b", None]
+
+    def test_absent_column_is_written_as_null(self, tmp_yxdb):
+        """Fields missing from the dict are NULL for every record."""
+        schema = _schema(("id", "Int32", 4), ("name", "V_String", 32))
+        with Writer(tmp_yxdb, schema) as w:
+            w.write_columns({"id": [1, 2]})
+
+        cols = openyxdb.read_yxdb(tmp_yxdb)
+        assert list(cols["id"]) == [1, 2]
+        assert list(cols["name"]) == [None, None]
+
+    def test_absent_leading_column_still_writes_rows(self, tmp_yxdb):
+        """The record count comes from whichever column is supplied."""
+        schema = _schema(("id", "Int32", 4), ("name", "V_String", 32))
+        with Writer(tmp_yxdb, schema) as w:
+            w.write_columns({"name": ["a", "b", "c"]})
+
+        cols = openyxdb.read_yxdb(tmp_yxdb)
+        assert list(cols["name"]) == ["a", "b", "c"]
+        assert list(cols["id"]) == [None, None, None]
+
+    def test_ragged_columns_raise(self, tmp_yxdb):
+        schema = _schema(("id", "Int32", 4), ("name", "V_String", 32))
+        with Writer(tmp_yxdb, schema) as w:
+            with pytest.raises(ValueError, match="values but"):
+                w.write_columns({"id": [1, 2, 3], "name": ["a"]})
+
+    def test_empty_columns_write_nothing(self, tmp_yxdb):
+        schema = _schema(("id", "Int32", 4))
+        with Writer(tmp_yxdb, schema) as w:
+            w.write_columns({"id": []})
+
+        with Reader(tmp_yxdb) as r:
+            assert r.num_records == 0
+
+    def test_multiple_calls_append(self, tmp_yxdb):
+        schema = _schema(("id", "Int32", 4))
+        with Writer(tmp_yxdb, schema) as w:
+            w.write_columns({"id": [1, 2]})
+            w.write_columns({"id": [3, 4]})
+
+        assert list(openyxdb.read_yxdb(tmp_yxdb)["id"]) == [1, 2, 3, 4]
+
+
+class TestWriteChunking:
+    """``from_pyarrow`` batches its input; batching must not change the file."""
+
+    def test_default_chunking_matches_unchunked(self, tmp_path):
+        pa = pytest.importorskip("pyarrow")
+
+        table = pa.table(
+            {
+                "id": pa.array(range(5000), type=pa.int32()),
+                "name": pa.array([f"row-{i}" for i in range(5000)], type=pa.utf8()),
+            }
+        )
+
+        chunked = str(tmp_path / "chunked.yxdb")
+        whole = str(tmp_path / "whole.yxdb")
+        openyxdb.from_pyarrow(table, chunked)
+        openyxdb.from_pyarrow(table, whole, chunk_size=0)
+
+        assert openyxdb.to_pyarrow(chunked).equals(openyxdb.to_pyarrow(whole))
+
+    def test_explicit_chunk_sizes_agree(self, tmp_path):
+        pa = pytest.importorskip("pyarrow")
+
+        table = pa.table({"id": pa.array(range(300), type=pa.int32())})
+        reference = None
+        for chunk_size in (1, 7, 128, 0):
+            out = str(tmp_path / f"chunk_{chunk_size}.yxdb")
+            openyxdb.from_pyarrow(table, out, chunk_size=chunk_size)
+            got = openyxdb.to_pyarrow(out)
+            if reference is None:
+                reference = got
+            assert got.equals(reference), f"chunk_size={chunk_size}"
+
+    def test_default_chunk_size_is_exported(self):
+        assert openyxdb.DEFAULT_WRITE_CHUNK_SIZE > 0
+
+
+class TestToPyArrowColumnRelease:
+    """``to_pyarrow`` pops each decoded column as it converts it."""
+
+    def test_all_columns_present_and_correct(self, tmp_yxdb):
+        pytest.importorskip("pyarrow")
+        schema = _schema(
+            ("a", "Int32", 4),
+            ("b", "Double", 8),
+            ("c", "V_String", 32),
+            ("d", "Date", 10),
+        )
+        with Writer(tmp_yxdb, schema) as w:
+            w.write_columns(
+                {
+                    "a": [1, 2],
+                    "b": [1.5, 2.5],
+                    "c": ["x", "y"],
+                    "d": ["2020-01-01", "2021-12-31"],
+                }
+            )
+
+        table = openyxdb.to_pyarrow(tmp_yxdb)
+        assert table.column_names == ["a", "b", "c", "d"]
+        assert table.num_rows == 2
+        assert table.column("a").to_pylist() == [1, 2]
+        assert table.column("c").to_pylist() == ["x", "y"]
+        assert [str(v) for v in table.column("d").to_pylist()] == [
+            "2020-01-01",
+            "2021-12-31",
+        ]

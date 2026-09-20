@@ -28,6 +28,27 @@ This library reads both layouts automatically -- the file's magic bytes are
 sniffed at open time and the appropriate decoder is selected. New files written
 through `openyxdb.Writer` use the original format.
 
+The newer E2 layout is only partially documented. Its reader validates record
+framing and rejects ambiguous integer encodings, invalid scalar prefixes, and
+unresolved blob references rather than returning guessed values. A bounded set
+of producer variants is therefore known to fail explicitly until their byte
+encoding can be verified.
+
+## Choosing between OpenYXDB and SigilYX
+
+OpenYXDB wraps Alteryx's own C++ implementation. Reach for it when you want that
+provenance, a C++ library to link against, or GPLv3.
+
+[SigilYX](https://github.com/Sigilweaver/SigilYX) is an independent Rust
+implementation of the same format under Apache-2.0. It decodes straight into
+Arrow buffers rather than through Python objects, so it is substantially faster
+and uses less memory on large files, and it offers constant-memory batch reads.
+Prefer it for large inputs, for throughput-sensitive Python work, or when GPLv3
+does not suit your project.
+
+For reading large files through OpenYXDB, `scan_yxdb` streams in batches and
+keeps peak memory bounded; `to_pyarrow` and friends materialise the whole file.
+
 ## Install
 
 ```bash
@@ -157,4 +178,3 @@ The 1.3.0 streaming sink (`sink_yxdb`) and DuckDB round-trip paths are exercised
 ## License
 
 GPLv3 -- see [LICENSE](https://github.com/Sigilweaver/OpenYXDB/blob/main/LICENSE).
-

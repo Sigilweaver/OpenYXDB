@@ -6,6 +6,53 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-09-19
+
+### Fixed
+
+- `Reader.num_records` returned 0 for every E2 (AMP-engine) file. The
+  lazy record count was guarded by a sentinel that its initial value
+  already satisfied, so the count was never computed. Because
+  `scan_yxdb` seeds its row budget from `num_records`, scanning an E2
+  file returned an empty frame with no error.
+- A windowed `read_columns_subset` on an E2 file cached its own row
+  count as the file's total, so a later `num_records` on the same
+  reader under-reported. The count is now only cached by an unlimited
+  read.
+- E2 record decoding now requires exact framing and unique values across the
+  observed Int32 encodings. Mixed-width recovery uses a bounded search and
+  raises on multiple complete interpretations instead of choosing one silently.
+  Invalid scalar prefixes and unresolved blob references also raise instead of
+  producing fabricated null values.
+- Nine-byte inline E2 blob values were mistaken for internal blob-reference
+  markers and replaced with nulls. Reference markers are now unambiguous.
+- `Writer.write_columns` took the record count from the first schema
+  field alone, and wrote nothing when that field was absent from the
+  supplied dict. It now takes the count from the first field actually
+  supplied, and raises `ValueError` when the supplied columns disagree
+  on length instead of failing mid-write.
+
+### Changed
+
+- `from_pyarrow`, `from_pandas`, `from_polars`, and `from_duckdb` now
+  batch their input by default (`DEFAULT_WRITE_CHUNK_SIZE`, 65 536
+  rows) rather than converting the whole table to Python objects up
+  front. Pass `chunk_size=0` for the previous single-pass behaviour.
+- `to_pyarrow` releases each decoded column once its Arrow array is
+  built, and no longer copies each column list or builds a second list
+  for date/time fields. Peak memory is still set by `read_columns`
+  materialising the whole file as Python objects; use `scan_yxdb` for a
+  bounded-memory read.
+- E2 reads avoid a per-record allocation, a copy of each decompressed
+  blob block, and buffering of blob and spatial-index payloads that are
+  only skipped over.
+- E2 block framing bounds record counts before allocating. A small reviewed
+  set of corpus files with unknown or ambiguous encodings remains unsupported
+  and fails explicitly; exact parsing is validation, not proof that every E2
+  producer variant is supported.
+- README documents when to prefer SigilYX, and that `scan_yxdb` is the
+  bounded-memory read path.
+
 ## [1.4.3] - 2026-07-18
 
 ### Fixed

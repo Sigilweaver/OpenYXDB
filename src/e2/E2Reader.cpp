@@ -24,6 +24,7 @@
 #include <cstdio>
 #include <cstring>
 #include <fcntl.h>
+#include <limits>
 #include <sstream>
 #include <stdexcept>
 #include <sys/stat.h>
@@ -276,7 +277,7 @@ E2Cell DecodeCompactInt(const uint8_t* p, size_t len, size_t* consumed,
     NeedBytes(1, len, "Int");
     uint8_t prefix = p[0];
     if (prefix == null_byte) { *consumed = 1; return E2Cell::MakeNull(); }
-    if (prefix < base)       { *consumed = 1; return E2Cell::MakeNull(); }
+    if (prefix < base) Fail("E2 Int: invalid prefix");
     int n = prefix - base;
     if (n == 0) { *consumed = 1; return E2Cell::MakeInt(0); }
     if (n > max_bytes) Fail("E2 Int: prefix exceeds type width");
@@ -306,7 +307,7 @@ E2Cell DecodeFloat(const uint8_t* p, size_t len, size_t* consumed) {
     NeedBytes(1, len, "Float");
     uint8_t prefix = p[0];
     if (prefix == kNullFloat) { *consumed = 1; return E2Cell::MakeNull(); }
-    if (prefix < 0x07)        { *consumed = 1; return E2Cell::MakeNull(); }
+    if (prefix < 0x07) Fail("E2 Float: invalid prefix");
     if (prefix == 0x07)       { *consumed = 1; return E2Cell::MakeDouble(0.0); }
     int n = prefix - 0x07;
     if (n < 1 || n > 4) Fail("E2 Float: invalid prefix");
@@ -325,7 +326,7 @@ E2Cell DecodeDouble(const uint8_t* p, size_t len, size_t* consumed) {
     if (prefix == kNullDouble || prefix == kNullDoubleAlt) {
         *consumed = 1; return E2Cell::MakeNull();
     }
-    if (prefix < 0x06) { *consumed = 1; return E2Cell::MakeNull(); }
+    if (prefix < 0x06) Fail("E2 Double: invalid prefix");
     if (prefix == 0x06) { *consumed = 1; return E2Cell::MakeDouble(0.0); }
     int n = prefix - 0x04;
     if (n < 3 || n > 8) Fail("E2 Double: invalid prefix");
@@ -343,9 +344,8 @@ E2Cell DecodeDouble(const uint8_t* p, size_t len, size_t* consumed) {
 // Returns one of:
 //   - Null cell (consumed = 1)
 //   - Text cell (inline)
-//   - Bytes cell with a fixed 9-byte payload representing a blob ref;
-//     the caller resolves it against blob_blocks. We tag blob refs with
-//     a special leading byte (0xFF, type_class) to identify them.
+//   - Internal Reference cell carrying an eight-byte blob reference;
+//     the caller resolves it against blob_blocks.
 //
 // `null_byte` is the type-specific null marker (0x41 for strings).
 E2Cell DecodeStringLike(const uint8_t* p, size_t len, size_t* consumed,
@@ -370,17 +370,14 @@ E2Cell DecodeStringLike(const uint8_t* p, size_t len, size_t* consumed,
         return E2Cell::MakeText(std::string(reinterpret_cast<const char*>(p + 3), n));
     }
     if (prefix == blob_ref_prefix) {
-        // Encode as Bytes with 9-byte marker:
-        //   [type_class] [8 bytes payload]
+        // Preserve the type class separately from the eight-byte payload so
+        // arbitrary inline bytes can never collide with a reference marker.
         // type_class 0x01 -> string ref (u32 offset + u32 length inline)
         // type_class 0x02/0x03 -> file-offset reference (u64 LE)
         NeedBytes(9, len, "blob ref");
-        std::vector<uint8_t> tag;
-        tag.reserve(9);
-        tag.push_back(blob_ref_prefix & 0x0F);
-        tag.insert(tag.end(), p + 1, p + 9);
+        std::vector<uint8_t> payload(p + 1, p + 9);
         *consumed = 9;
-        return E2Cell::MakeBytes(std::move(tag));
+        return E2Cell::MakeReference(blob_ref_prefix & 0x0F, std::move(payload));
     }
     Fail("E2 String-like: invalid prefix");
 }
@@ -389,7 +386,7 @@ E2Cell DecodeDate(const uint8_t* p, size_t len, size_t* consumed) {
     NeedBytes(1, len, "Date");
     uint8_t prefix = p[0];
     if (prefix == kNullDate) { *consumed = 1; return E2Cell::MakeNull(); }
-    if (prefix < 0x0A) { *consumed = 1; return E2Cell::MakeNull(); }
+    if (prefix < 0x0A) Fail("E2 Date: invalid prefix");
     if (prefix == 0x0A) { *consumed = 1; return E2Cell::MakeText(FormatDate(0)); }
     int n = prefix - 0x0A;
     if (n < 1 || n > 4) Fail("E2 Date: invalid prefix");
@@ -405,7 +402,7 @@ E2Cell DecodeDateTime(const uint8_t* p, size_t len, size_t* consumed) {
     NeedBytes(1, len, "DateTime");
     uint8_t prefix = p[0];
     if (prefix == kNullDateTime) { *consumed = 1; return E2Cell::MakeNull(); }
-    if (prefix < 0x08) { *consumed = 1; return E2Cell::MakeNull(); }
+    if (prefix < 0x08) Fail("E2 DateTime: invalid prefix");
     if (prefix == 0x08) {
         *consumed = 1; return E2Cell::MakeText(FormatDateTimePacked(0));
     }
@@ -423,7 +420,7 @@ E2Cell DecodeTime(const uint8_t* p, size_t len, size_t* consumed) {
     NeedBytes(1, len, "Time");
     uint8_t prefix = p[0];
     if (prefix == kNullTime) { *consumed = 1; return E2Cell::MakeNull(); }
-    if (prefix < 0x0C) { *consumed = 1; return E2Cell::MakeNull(); }
+    if (prefix < 0x0C) Fail("E2 Time: invalid prefix");
     if (prefix == 0x0C) { *consumed = 1; return E2Cell::MakeText("00:00:00"); }
     int n = prefix - 0x0C;
     if (n < 1 || n > 4) Fail("E2 Time: invalid prefix");
@@ -457,10 +454,7 @@ E2Cell DecodeFixedDecimal(const uint8_t* p, size_t len, size_t* consumed) {
     for (int i = 0; i < sig_digits; ++i) {
         uint8_t byte = p[3 + (i / 2)];
         uint8_t nib = (i % 2 == 0) ? (byte >> 4) : (byte & 0x0F);
-        if (nib > 9) {
-            // Some encoders pad with high nibbles; we treat anything >9 as 0.
-            nib = 0;
-        }
+        if (nib > 9) Fail("E2 FixedDecimal: invalid BCD digit");
         digits.push_back(static_cast<char>('0' + nib));
     }
     bool negative = (sign_scale & 0x80) != 0;
@@ -523,12 +517,9 @@ E2Cell DecodeBlobOrSpatial(const uint8_t* p, size_t len, size_t* consumed,
         // 0x12 = blob file offset (u64).
         // 0x13 = spatial file offset (u64).
         NeedBytes(9, len, "blob ref");
-        std::vector<uint8_t> tag;
-        tag.reserve(9);
-        tag.push_back(prefix & 0x0F);
-        tag.insert(tag.end(), p + 1, p + 9);
+        std::vector<uint8_t> payload(p + 1, p + 9);
         *consumed = 9;
-        return E2Cell::MakeBytes(std::move(tag));
+        return E2Cell::MakeReference(prefix & 0x0F, std::move(payload));
     }
     Fail("E2 Blob/Spatial: invalid prefix");
 }
@@ -619,6 +610,13 @@ public:
         if (LSEEK(fd, off, SEEK_SET) < 0) Fail("E2: seek failed");
         pos = off;
     }
+    // Advance past `n` bytes without transferring them. `what` names the
+    // region being skipped so a truncated file reports where it ran out.
+    void Skip(int64_t n, const char* what) {
+        if (n < 0 || n > size - pos)
+            Fail(std::string("E2: short read on ") + what);
+        Seek(pos + n);
+    }
 };
 
 }  // anonymous namespace
@@ -634,6 +632,8 @@ struct E2Reader::Impl {
 
     bool hasDateFlag{false};
     bool dateFlagDetected{false};
+    bool hasInt32{false};
+    uint8_t int32Base{6};
 };
 
 E2Reader::~E2Reader() = default;
@@ -664,6 +664,10 @@ E2Reader::E2Reader(const std::string& path) : m_impl(std::make_unique<Impl>()) {
     m_impl->file.Read(m_metaXml.data(), meta_size, "metadata");
 
     ParseMetaXml(m_metaXml, m_schema);
+    m_impl->hasInt32 = std::any_of(
+        m_schema.begin(), m_schema.end(), [](const E2FieldMeta& field) {
+            return field.type == E2FieldType::Int32;
+        });
     // Record count is computed lazily on demand.
 }
 
@@ -676,7 +680,8 @@ namespace {
 // Try to decode a record with a given date-flag setting; return bytes
 // consumed before any error. Used by the date-flag auto-detector.
 size_t TryDecodeRecord(const std::vector<E2FieldMeta>& fields,
-                       const uint8_t* p, size_t len, bool has_date_flag) {
+                       const uint8_t* p, size_t len, bool has_date_flag,
+                       uint8_t int32_base) {
     size_t off = 0;
     bool first_date = true;
     for (const auto& f : fields) {
@@ -695,7 +700,7 @@ size_t TryDecodeRecord(const std::vector<E2FieldMeta>& fields,
                 case E2FieldType::Int16:
                     DecodeCompactInt(p + off, len - off, &c, 6, kNullInt16, 2); break;
                 case E2FieldType::Int32:
-                    DecodeCompactInt(p + off, len - off, &c, 6, kNullInt32, 4); break;
+                    DecodeCompactInt(p + off, len - off, &c, int32_base, kNullInt32, 4); break;
                 case E2FieldType::Int64:
                     DecodeCompactInt(p + off, len - off, &c, 6, kNullInt64, 8); break;
                 case E2FieldType::Float:
@@ -730,7 +735,8 @@ size_t TryDecodeRecord(const std::vector<E2FieldMeta>& fields,
 }
 
 E2Cell DecodeOneField(const E2FieldMeta& f,
-                      const uint8_t* p, size_t len, size_t* consumed) {
+                      const uint8_t* p, size_t len, size_t* consumed,
+                      uint8_t int32_base) {
     switch (f.type) {
         case E2FieldType::Bool:
             return DecodeBool(p, len, consumed);
@@ -739,7 +745,7 @@ E2Cell DecodeOneField(const E2FieldMeta& f,
         case E2FieldType::Int16:
             return DecodeCompactInt(p, len, consumed, 6, kNullInt16, 2);
         case E2FieldType::Int32:
-            return DecodeCompactInt(p, len, consumed, 6, kNullInt32, 4);
+            return DecodeCompactInt(p, len, consumed, int32_base, kNullInt32, 4);
         case E2FieldType::Int64:
             return DecodeCompactInt(p, len, consumed, 6, kNullInt64, 8);
         case E2FieldType::Float:
@@ -767,6 +773,182 @@ E2Cell DecodeOneField(const E2FieldMeta& f,
     Fail("E2: unhandled field type");
 }
 
+// Decode using one file-wide Int32 prefix base and require exact framing.
+bool DecodeRecordUniform(const std::vector<E2FieldMeta>& fields,
+                         const uint8_t* p, size_t len, bool has_date_flag,
+                         uint8_t int32_base, std::vector<E2Cell>& output,
+                         bool* saw_ambiguous_prefix = nullptr) {
+    output.clear();
+    output.reserve(fields.size());
+    if (saw_ambiguous_prefix) *saw_ambiguous_prefix = false;
+    size_t off = 0;
+    bool first_date = true;
+    try {
+        for (const auto& field : fields) {
+            const bool is_date = field.type == E2FieldType::Date;
+            if (is_date && first_date && has_date_flag) {
+                if (off >= len || p[off] != 0x00) return false;
+                ++off;
+            }
+            if (saw_ambiguous_prefix && field.type == E2FieldType::Int32 &&
+                off < len && p[off] == 0x09)
+                *saw_ambiguous_prefix = true;
+            size_t consumed = 0;
+            output.push_back(DecodeOneField(
+                field, p + off, len - off, &consumed, int32_base));
+            off += consumed;
+            if (is_date) first_date = false;
+        }
+    } catch (...) {
+        output.clear();
+        return false;
+    }
+    if (off != len) {
+        output.clear();
+        return false;
+    }
+    return true;
+}
+
+enum class MixedDecodeResult { None, Unique, Ambiguous, SearchLimit };
+
+bool SameCell(const E2Cell& left, const E2Cell& right) {
+    if (left.kind != right.kind) return false;
+    switch (left.kind) {
+        case E2Cell::Kind::Null: return true;
+        case E2Cell::Kind::Bool: return left.boolean == right.boolean;
+        case E2Cell::Kind::Int64: return left.integer == right.integer;
+        case E2Cell::Kind::Double:
+            return std::memcmp(&left.real, &right.real, sizeof(double)) == 0;
+        case E2Cell::Kind::Text: return left.text == right.text;
+        case E2Cell::Kind::Bytes: return left.bytes == right.bytes;
+        case E2Cell::Kind::Reference:
+            return left.referenceTag == right.referenceTag &&
+                   left.bytes == right.bytes;
+    }
+    return false;
+}
+
+bool SameRow(const std::vector<E2Cell>& left, const std::vector<E2Cell>& right) {
+    if (left.size() != right.size()) return false;
+    for (size_t i = 0; i < left.size(); ++i)
+        if (!SameCell(left[i], right[i])) return false;
+    return true;
+}
+
+// Some corpus producers mix the two observed Int32 prefix bases within one
+// record. Count complete parses, capped at two, then reconstruct the sole
+// path. Layered dynamic programming prevents recursion and exponential
+// backtracking; the state budget also bounds adversarial wide records.
+MixedDecodeResult DecodeRecordMixedUnique(
+        const std::vector<E2FieldMeta>& fields,
+        const uint8_t* p, size_t len, bool has_date_flag,
+        uint8_t preferred_int32_base, std::vector<E2Cell>& output) {
+    constexpr size_t kMaxSearchStates = 8192;
+    const uint8_t alternate_int32_base =
+        preferred_int32_base == 5 ? uint8_t{6} : uint8_t{5};
+    struct Node {
+        uint8_t paths{0};
+        size_t previous{0};
+        uint8_t int32_base{6};
+    };
+    struct Candidate {
+        E2Cell cell;
+        size_t consumed{0};
+        uint8_t int32_base{6};
+    };
+    std::vector<std::unordered_map<size_t, Node>> layers(fields.size() + 1);
+    layers[0].emplace(0, Node{1, 0, preferred_int32_base});
+    size_t states = 1;
+
+    auto field_offset = [&](size_t field_index, size_t off, size_t* adjusted) {
+        *adjusted = off;
+        if (!has_date_flag || fields[field_index].type != E2FieldType::Date)
+            return true;
+        bool first_date = true;
+        for (size_t i = 0; i < field_index; ++i) {
+            if (fields[i].type == E2FieldType::Date) {
+                first_date = false;
+                break;
+            }
+        }
+        if (!first_date) return true;
+        if (*adjusted >= len || p[*adjusted] != 0x00) return false;
+        ++*adjusted;
+        return true;
+    };
+
+    auto candidates = [&](size_t field_index, size_t off,
+                          std::array<Candidate, 2>& decoded) {
+        const auto& field = fields[field_index];
+        const uint8_t bases[2] = {preferred_int32_base, alternate_int32_base};
+        const size_t base_count = field.type == E2FieldType::Int32 &&
+                                  off < len && p[off] == 0x09 ? 2 : 1;
+        size_t count = 0;
+        for (size_t i = 0; i < base_count; ++i) {
+            size_t consumed = 0;
+            try {
+                E2Cell cell = DecodeOneField(
+                    field, p + off, len - off, &consumed, bases[i]);
+                bool duplicate = false;
+                for (size_t j = 0; j < count; ++j)
+                    duplicate = duplicate || decoded[j].consumed == consumed;
+                if (!duplicate)
+                    decoded[count++] = {std::move(cell), consumed, bases[i]};
+            } catch (...) {
+                // This base is not valid at this byte offset.
+            }
+        }
+        return count;
+    };
+
+    for (size_t field_index = 0; field_index < fields.size(); ++field_index) {
+        auto& next = layers[field_index + 1];
+        for (const auto& entry : layers[field_index]) {
+            size_t adjusted = 0;
+            if (!field_offset(field_index, entry.first, &adjusted)) continue;
+            std::array<Candidate, 2> decoded;
+            const size_t count = candidates(field_index, adjusted, decoded);
+            for (size_t i = 0; i < count; ++i) {
+                const size_t next_offset = adjusted + decoded[i].consumed;
+                if (next_offset > len) continue;
+                auto inserted = next.emplace(
+                    next_offset,
+                    Node{entry.second.paths, entry.first,
+                         decoded[i].int32_base});
+                if (inserted.second) {
+                    if (++states > kMaxSearchStates)
+                        return MixedDecodeResult::SearchLimit;
+                } else {
+                    inserted.first->second.paths = static_cast<uint8_t>(
+                        std::min<int>(2, inserted.first->second.paths +
+                                            entry.second.paths));
+                }
+            }
+        }
+        if (next.empty()) return MixedDecodeResult::None;
+    }
+
+    auto complete = layers.back().find(len);
+    if (complete == layers.back().end()) return MixedDecodeResult::None;
+    if (complete->second.paths > 1) return MixedDecodeResult::Ambiguous;
+
+    output.resize(fields.size());
+    size_t off = len;
+    for (size_t field_index = fields.size(); field_index-- > 0;) {
+        const auto node = layers[field_index + 1].at(off);
+        size_t adjusted = 0;
+        if (!field_offset(field_index, node.previous, &adjusted))
+            return MixedDecodeResult::None;
+        size_t consumed = 0;
+        output[field_index] = DecodeOneField(
+            fields[field_index], p + adjusted, len - adjusted, &consumed,
+            node.int32_base);
+        off = node.previous;
+    }
+    return off == 0 ? MixedDecodeResult::Unique : MixedDecodeResult::None;
+}
+
 // Frame variable-length records inside a decompressed block.
 // Returns spans (offset,length) into `block`.
 struct Span { size_t offset; size_t length; };
@@ -776,6 +958,9 @@ void FrameRecords(const std::vector<uint8_t>& block, std::vector<Span>& out) {
     uint32_t rec_count = LoadU32LE(block.data() + 4);
     uint32_t first_size = LoadU32LE(block.data() + 8) & 0x7FFFFFFFu;
     if (rec_count == 0) return;
+    const size_t max_records = 1 + (block.size() - 12) / 4;
+    if (rec_count > max_records)
+        Fail("E2: record count exceeds framed block capacity");
     out.reserve(rec_count);
     size_t pos = 12;
     if (pos + first_size > block.size())
@@ -790,6 +975,33 @@ void FrameRecords(const std::vector<uint8_t>& block, std::vector<Span>& out) {
         out.push_back({pos, sz});
         pos += sz;
     }
+}
+
+uint8_t DetectInt32Base(const std::vector<E2FieldMeta>& fields,
+                        const std::vector<uint8_t>& block,
+                        const std::vector<Span>& spans,
+                        bool has_date_flag) {
+    if (std::none_of(fields.begin(), fields.end(), [](const E2FieldMeta& field) {
+            return field.type == E2FieldType::Int32;
+        })) {
+        return 6;
+    }
+
+    auto score = [&](uint8_t base) {
+        size_t complete = 0;
+        size_t consumed_total = 0;
+        const size_t sample_size = std::min<size_t>(spans.size(), 128);
+        for (size_t i = 0; i < sample_size; ++i) {
+            const auto& span = spans[i];
+            const size_t consumed = TryDecodeRecord(
+                fields, block.data() + span.offset, span.length, has_date_flag, base);
+            complete += consumed == span.length;
+            consumed_total += consumed;
+        }
+        return std::make_pair(complete, consumed_total);
+    };
+
+    return score(5) > score(6) ? 5 : 6;
 }
 
 }  // anonymous namespace
@@ -809,6 +1021,7 @@ int64_t E2Reader::NumRecords() {
     int64_t total = 0;
     std::vector<uint8_t> compressed;
     std::vector<uint8_t> decompressed;
+    std::vector<Span> spans;
 
     while (m_impl->file.pos < m_impl->file.size) {
         uint8_t type_byte;
@@ -822,8 +1035,7 @@ int64_t E2Reader::NumRecords() {
             uint32_t block_size = LoadU32LE(size_buf);
             uint8_t hdr20[20];
             m_impl->file.Read(hdr20, 20, "blob block header");
-            std::vector<uint8_t> skip(block_size);
-            if (block_size) m_impl->file.Read(skip.data(), block_size, "blob skip");
+            m_impl->file.Skip(block_size, "blob skip");
             continue;
         }
 
@@ -833,8 +1045,7 @@ int64_t E2Reader::NumRecords() {
             uint32_t block_size = LoadU32LE(size_buf);
             uint8_t inner[4];
             m_impl->file.Read(inner, 4, "spatial inner");
-            std::vector<uint8_t> skip(block_size);
-            if (block_size) m_impl->file.Read(skip.data(), block_size, "spatial skip");
+            m_impl->file.Skip(block_size, "spatial skip");
             continue;
         }
 
@@ -850,9 +1061,12 @@ int64_t E2Reader::NumRecords() {
         decompressed.clear();
         SnappyDecompressRaw(compressed.data() + 1, compressed.size() - 1,
                             decompressed);
-        if (decompressed.size() < 8) Fail("E2: short decompressed block");
-        uint32_t rec_count = LoadU32LE(decompressed.data() + 4);
-        total += rec_count;
+        spans.clear();
+        FrameRecords(decompressed, spans);
+        if (spans.size() > static_cast<size_t>(
+                std::numeric_limits<int64_t>::max() - total))
+            Fail("E2: record count overflow");
+        total += static_cast<int64_t>(spans.size());
     }
     m_recordCount = total;
     return total;
@@ -868,6 +1082,8 @@ void E2Reader::ReadColumnsSubset(const std::vector<size_t>& projection,
     // Restart from the start of the data section.
     int64_t data_start = 100 + static_cast<int64_t>(m_metaXml.size());
     m_impl->file.Seek(data_start);
+    m_impl->blobBlocks.clear();
+    m_impl->lastBlob = nullptr;
 
     int64_t produced = 0;
     int64_t skipped = 0;
@@ -876,6 +1092,8 @@ void E2Reader::ReadColumnsSubset(const std::vector<size_t>& projection,
     std::vector<uint8_t> compressed;
     std::vector<uint8_t> decompressed;
     std::vector<Span> spans;
+    // Reused across records so the decode loop does not reallocate per record.
+    std::vector<E2Cell> row;
 
     while (!reached_limit && m_impl->file.pos < m_impl->file.size) {
         uint8_t type_byte;
@@ -900,7 +1118,7 @@ void E2Reader::ReadColumnsSubset(const std::vector<size_t>& projection,
             SnappyDecompressRaw(compressed.data() + 1, compressed.size() - 1,
                                 decompressed);
             auto& slot = m_impl->blobBlocks[static_cast<uint64_t>(block_pos)];
-            slot = decompressed;
+            slot = std::move(decompressed);
             m_impl->lastBlob = &slot;
             continue;
         }
@@ -912,8 +1130,7 @@ void E2Reader::ReadColumnsSubset(const std::vector<size_t>& projection,
             uint32_t block_size = LoadU32LE(size_buf);
             uint8_t inner[4];
             m_impl->file.Read(inner, 4, "spatial inner");
-            std::vector<uint8_t> skip(block_size);
-            if (block_size) m_impl->file.Read(skip.data(), block_size, "spatial payload");
+            m_impl->file.Skip(block_size, "spatial payload");
             continue;
         }
 
@@ -944,8 +1161,21 @@ void E2Reader::ReadColumnsSubset(const std::vector<size_t>& projection,
             if (any_date) {
                 const auto& span = spans[0];
                 const uint8_t* p = decompressed.data() + span.offset;
-                size_t without = TryDecodeRecord(m_schema, p, span.length, false);
-                size_t with    = TryDecodeRecord(m_schema, p, span.length, true);
+                size_t without = TryDecodeRecord(
+                    m_schema, p, span.length, false, m_impl->int32Base);
+                size_t with = TryDecodeRecord(
+                    m_schema, p, span.length, true, m_impl->int32Base);
+                m_impl->hasDateFlag = with > without;
+            }
+            m_impl->int32Base = DetectInt32Base(
+                m_schema, decompressed, spans, m_impl->hasDateFlag);
+            if (any_date) {
+                const auto& span = spans[0];
+                const uint8_t* p = decompressed.data() + span.offset;
+                size_t without = TryDecodeRecord(
+                    m_schema, p, span.length, false, m_impl->int32Base);
+                size_t with = TryDecodeRecord(
+                    m_schema, p, span.length, true, m_impl->int32Base);
                 m_impl->hasDateFlag = with > without;
             }
             m_impl->dateFlagDetected = true;
@@ -956,43 +1186,71 @@ void E2Reader::ReadColumnsSubset(const std::vector<size_t>& projection,
             if (limit >= 0 && produced >= limit) { reached_limit = true; break; }
 
             const uint8_t* base = decompressed.data() + span.offset;
-            size_t off = 0;
-            bool first_date = true;
+            if (m_impl->hasInt32) {
+                const uint8_t alternate_base = m_impl->int32Base == 5 ? 6 : 5;
+                std::vector<E2Cell> alternate_row;
+                bool preferred_saw_09 = false;
+                bool alternate_saw_09 = false;
+                const bool preferred_exact = DecodeRecordUniform(
+                    m_schema, base, span.length, m_impl->hasDateFlag,
+                    m_impl->int32Base, row, &preferred_saw_09);
+                const bool alternate_exact = DecodeRecordUniform(
+                    m_schema, base, span.length, m_impl->hasDateFlag,
+                    alternate_base, alternate_row, &alternate_saw_09);
 
-            // Decode each field of the schema, then pick projected ones.
-            std::vector<E2Cell> row;
-            row.reserve(m_schema.size());
-            bool ok = true;
-            for (const auto& f : m_schema) {
-                if (f.type == E2FieldType::Date && first_date && m_impl->hasDateFlag) {
-                    if (off >= span.length || base[off] != 0x00) { ok = false; break; }
-                    off += 1;
+                // Prefix 0x09 is the only corpus-observed per-field width
+                // ambiguity, so mixed searches branch only there. Complete
+                // uniform parses under both bases must still agree on values.
+                if (preferred_exact && alternate_exact &&
+                    !preferred_saw_09 && !alternate_saw_09) {
+                    if (!SameRow(row, alternate_row))
+                        Fail("E2: ambiguous Int32 encoding in record " +
+                             std::to_string(skipped + produced));
+                    // Both encodings produce the same row. Keep `row`.
+                } else {
+                    std::vector<E2Cell> preferred_mixed;
+                    std::vector<E2Cell> alternate_mixed;
+                    const auto preferred_result = DecodeRecordMixedUnique(
+                        m_schema, base, span.length, m_impl->hasDateFlag,
+                        m_impl->int32Base, preferred_mixed);
+                    const auto alternate_result = DecodeRecordMixedUnique(
+                        m_schema, base, span.length, m_impl->hasDateFlag,
+                        alternate_base, alternate_mixed);
+                    if (preferred_result == MixedDecodeResult::SearchLimit ||
+                        alternate_result == MixedDecodeResult::SearchLimit)
+                        Fail("E2: Int32 ambiguity search limit exceeded in record " +
+                             std::to_string(skipped + produced));
+                    if (preferred_result == MixedDecodeResult::Ambiguous ||
+                        alternate_result == MixedDecodeResult::Ambiguous ||
+                        (preferred_result == MixedDecodeResult::Unique &&
+                         alternate_result == MixedDecodeResult::Unique &&
+                         !SameRow(preferred_mixed, alternate_mixed)))
+                        Fail("E2: ambiguous Int32 encoding in record " +
+                             std::to_string(skipped + produced));
+                    if (preferred_result == MixedDecodeResult::Unique) {
+                        row = std::move(preferred_mixed);
+                    } else if (alternate_result == MixedDecodeResult::Unique) {
+                        row = std::move(alternate_mixed);
+                    } else {
+                        Fail("E2: failed to decode record " +
+                             std::to_string(skipped + produced) +
+                             ": no exact match for the declared schema");
+                    }
                 }
-                size_t consumed = 0;
-                E2Cell cell;
-                try {
-                    cell = DecodeOneField(f, base + off, span.length - off, &consumed);
-                } catch (const std::exception&) {
-                    ok = false;
-                    break;
-                }
-                off += consumed;
-                if (f.type == E2FieldType::Date) first_date = false;
-                row.push_back(std::move(cell));
+            } else if (!DecodeRecordUniform(
+                           m_schema, base, span.length, m_impl->hasDateFlag,
+                           m_impl->int32Base, row)) {
+                Fail("E2: failed to decode record " +
+                     std::to_string(skipped + produced) +
+                     ": no exact match for the declared schema");
             }
-            if (!ok) {
-                // Emit nulls for the projected columns so row counts stay
-                // consistent. Matches the Rust impl's behaviour.
-                for (size_t pi = 0; pi < projection.size(); ++pi)
-                    columns[pi].push_back(E2Cell::MakeNull());
-            } else {
-                // Resolve any blob refs in projected fields.
-                for (size_t pi = 0; pi < projection.size(); ++pi) {
-                    size_t idx = projection[pi];
-                    E2Cell& cell = row[idx];
-                    if (cell.kind == E2Cell::Kind::Bytes && cell.bytes.size() == 9) {
-                        uint8_t tag = cell.bytes[0];
-                        const uint8_t* payload = cell.bytes.data() + 1;
+            // Resolve any blob refs in projected fields.
+            for (size_t pi = 0; pi < projection.size(); ++pi) {
+                size_t idx = projection[pi];
+                E2Cell& cell = row[idx];
+                if (cell.kind == E2Cell::Kind::Reference) {
+                        uint8_t tag = cell.referenceTag;
+                        const uint8_t* payload = cell.bytes.data();
                         const auto& ft = m_schema[idx].type;
                         if (tag == 0x01) {
                             // string-style ref: u32 offset + u32 length into lastBlob
@@ -1009,7 +1267,8 @@ void E2Reader::ReadColumnsSubset(const std::vector<size_t>& projection,
                                         reinterpret_cast<const char*>(d), blen));
                                 }
                             } else {
-                                cell = E2Cell::MakeNull();
+                                Fail("E2: unresolved inline blob reference in record " +
+                                     std::to_string(skipped + produced));
                             }
                         } else if (tag == 0x02 || tag == 0x03) {
                             // file-offset ref: u64 LE
@@ -1018,19 +1277,21 @@ void E2Reader::ReadColumnsSubset(const std::vector<size_t>& projection,
                             if (it != m_impl->blobBlocks.end()) {
                                 cell = E2Cell::MakeBytes(it->second);
                             } else {
-                                cell = E2Cell::MakeNull();
+                                Fail("E2: unresolved file-offset blob reference in record " +
+                                     std::to_string(skipped + produced));
                             }
                         } else {
-                            cell = E2Cell::MakeNull();
+                            Fail("E2: invalid blob reference tag in record " +
+                                 std::to_string(skipped + produced));
                         }
-                    }
-                    columns[pi].push_back(std::move(cell));
                 }
+                columns[pi].push_back(std::move(cell));
             }
             ++produced;
         }
     }
-    m_recordCount = produced + skipped;
+    // A limited read stops early, so it does not establish the file's total.
+    if (limit < 0) m_recordCount = produced + skipped;
 }
 
 }}}  // namespace Alteryx::OpenYXDB::e2

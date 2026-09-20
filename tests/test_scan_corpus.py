@@ -1,6 +1,6 @@
 """Correctness + pushdown tests for ``openyxdb.scan_yxdb`` against the E1 corpus.
 
-Each test iterates the real-world YXDB files under ``OpenYXDB/e1/`` and asserts
+Each test iterates the real-world E1 YXDB corpus (see ``conftest``) and asserts
 that the lazy scan behaves identically to the eager readers for full collects,
 projection, and row-limit pushdown. Also includes a perf guard that confirms
 ``head(k)`` is near-constant-time regardless of file size.
@@ -13,20 +13,12 @@ from pathlib import Path
 
 import openyxdb
 import pytest
+from conftest import corpus_files
 from openyxdb._openyxdb import Reader
 
 pl = pytest.importorskip("polars")
 
-CORPUS_DIR = Path(__file__).resolve().parent.parent / "e1"
-
-
-def _corpus_files() -> list[Path]:
-    if not CORPUS_DIR.is_dir():
-        return []
-    return sorted(p for p in CORPUS_DIR.glob("*.yxdb") if p.is_file())
-
-
-ALL_FILES = _corpus_files()
+ALL_FILES = corpus_files("e1")
 
 if not ALL_FILES:
     pytest.skip("E1 corpus not available", allow_module_level=True)
