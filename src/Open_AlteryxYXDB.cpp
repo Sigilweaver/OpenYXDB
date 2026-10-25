@@ -161,7 +161,7 @@ unsigned File_Large::Read(void* _pBuffer, unsigned nNumBytesToRead)
 		// A short read is not an OS error, so errno is not meaningful here.
 		std::string msg = "Error in Read: expected " + std::to_string(nNumBytesToRead) + " bytes at offset "
 			+ std::to_string(nStartPos) + " but got " + std::to_string(ret) + " (unexpected end of file)";
-		throw Error(AString(msg.c_str()));
+		throw Error(ErrorKind::IO, AString(msg.c_str()));
 	}
 
 	return static_cast<unsigned>(ret);
@@ -275,7 +275,7 @@ Open_AlteryxYXDB::~Open_AlteryxYXDB()
 
 [[noreturn]] static void ThrowFormatError(const std::string& msg)
 {
-	throw Error(AString(msg.c_str()));
+	throw Error(ErrorKind::Format, AString(msg.c_str()));
 }
 
 void Open_AlteryxYXDB::ValidateHeader()
@@ -330,7 +330,7 @@ void Open_AlteryxYXDB::ValidateHeader()
 
 	m_recordInfo.InitFromXml(strRecordInfoXml);
 	if (m_recordInfo.NumFields() == 0)
-		ThrowFormatError(std::string("YXDB schema XML has no RecordInfo element or no Field elements"));
+		throw Error(ErrorKind::Schema, AString("YXDB schema XML has no RecordInfo element or no Field elements"));
 	m_pRecord = m_recordInfo.CreateRecord();
 
 	// make sure we are at the first record in the file

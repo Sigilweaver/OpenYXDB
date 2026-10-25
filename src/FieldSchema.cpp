@@ -95,7 +95,7 @@ FieldSchema FieldSchema::FromXML(
 	String strType = MINIXML_NAMESPACE::MiniXmlParser::GetAttribute(tagField, _U("type"), true);
 	E_FieldType ft = GetFieldTypeFromName(strType);
 	if (ft == E_FT_Unknown)
-		throw Error(XMSG("Unknown field type: @1", strType));
+		throw Error(ErrorKind::Schema, XMSG("Unknown field type: @1", strType));
 	String strName = MINIXML_NAMESPACE::MiniXmlParser::GetAttribute(tagField, _U("name"), true);
 	if (pNamePrefix)
 		strName = pNamePrefix + strName;

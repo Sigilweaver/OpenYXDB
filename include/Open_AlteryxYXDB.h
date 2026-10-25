@@ -126,7 +126,7 @@ protected:
 		if ((fileID & 0x00ff0000) != (ID_WRIGLEYDB & 0x00ff0000))
 		{
 			//Rprintf("Throwing an Error - The FileID does not match in the FileHeader.\n");
-			throw Error(outFile.GetFileName() + U16(" \nThe FileID does not match in the FileHeader."));
+			throw Error(ErrorKind::Format, outFile.GetFileName() + U16(" \nThe FileID does not match in the FileHeader."));
 		}
 
 		unsigned nFileVersion = fileID & 0xff;
@@ -138,12 +138,14 @@ protected:
 		{
 			//Rprintf("Throwing an Error - The file version is older than expected.  This file cannot be read.\n");
 			throw Error(
+				ErrorKind::Format,
 				outFile.GetFileName() + U16(" \nThe file version is older than expected.  This file cannot be read."));
 		}
 		if (nFileVersion > nMaxVersion)
 		{
 			//Rprintf("Throwing an Error - The file version is newer than expected.  This file cannot be read.\n");
 			throw Error(
+				ErrorKind::Format,
 				outFile.GetFileName() + U16(" \nThe file version is newer than expected.  This file cannot be read."));
 		}
 	}
