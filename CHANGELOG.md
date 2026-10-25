@@ -79,6 +79,13 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - Reader: a wide-string value containing a lone UTF-16 surrogate raises
   `ConversionError` instead of returning U+FFFD.
 - `sink_yxdb` no longer catches `TypeError` from the query and re-runs it.
+- String and V_String values (E1 files) are decoded with one encoding for the
+  whole file, chosen with the `narrow_encoding` argument (default `utf-8`,
+  strict), instead of guessing UTF-8 or Latin-1 per value. Bytes that are not
+  valid in the encoding raise `ConversionError` naming the field, the record
+  and the byte offset. The writer encodes with the same codec and raises
+  `ConversionError` for characters it cannot represent. Field sizes count
+  encoded bytes. Any Python codec name is accepted.
 
 ### Behavior changes
 
@@ -94,6 +101,12 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - A `Writer` that is not closed never produces `<path>`. An exception inside
   `with Writer(...)` removes the output; a dropped `Writer` discards it with a
   `ResourceWarning`.
+- String and V_String values that are not valid UTF-8 (single-byte text such
+  as Windows-1252) now raise `ConversionError` instead of being decoded as
+  Latin-1 per value. Pass `narrow_encoding="cp1252"` or `"latin-1"` to read
+  them. In the 1001-file test corpus 86 files raise; each holds at least one
+  value that is not valid UTF-8. Files that mix UTF-8 and single-byte values
+  need a per-value fallback, which is not offered.
 
 ## [1.5.0] - 2026-09-19
 

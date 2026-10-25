@@ -200,20 +200,34 @@ static E_FieldType field_type_from_name(const std::string& name) {
     raise_error(ErrorKind::Schema, "Unknown field type: " + name);
 }
 
-// Convert narrow string bytes to a Python str.
-// Tries UTF-8 first; falls back to Latin-1 (which never fails) since YXDB
-// narrow string fields (String/V_String) use the system codepage encoding
-// from Windows (typically Windows-1252, a superset of Latin-1).
-static nb::object narrow_to_python_str(const char* data, size_t len) {
-    PyObject* obj = PyUnicode_DecodeUTF8(data, static_cast<Py_ssize_t>(len), "strict");
-    if (obj) return nb::steal<nb::object>(obj);
-    PyErr_Clear();
-    return nb::steal<nb::object>(
-        PyUnicode_DecodeLatin1(data, static_cast<Py_ssize_t>(len), nullptr));
+// Validate that `encoding` names a Python codec.
+static void check_codec(const std::string& encoding) {
+    if (!PyCodec_KnownEncoding(encoding.c_str())) {
+        PyErr_Clear();
+        raise_error(ErrorKind::Unsupported, "unknown narrow_encoding '" + encoding + "'");
+    }
+}
+
+// Decode the bytes of a narrow (String/V_String) field with one fixed
+// encoding for the whole file. Alteryx stores these fields in a single-byte
+// code page, so the default is latin-1, which maps every byte. A stricter
+// encoding such as 'utf-8' raises on bytes it cannot decode.
+static nb::object narrow_to_python_str(const FieldBase* field, const char* data, size_t len,
+                                       const std::string& encoding) {
+    PyObject* obj = PyUnicode_Decode(data, static_cast<Py_ssize_t>(len), encoding.c_str(), "strict");
+    if (!obj) {
+        PyErr_Clear();
+        raise_error(ErrorKind::Conversion,
+                    "field '" + wstring_to_utf8(WString(field->GetFieldName().c_str()), false)
+                        + "' holds bytes that are not valid " + encoding
+                        + "; pass a different narrow_encoding");
+    }
+    return nb::steal<nb::object>(obj);
 }
 
 // Extract a field value as a Python object
-static nb::object field_to_python(const FieldBase* field, const RecordData* rec) {
+static nb::object field_to_python(const FieldBase* field, const RecordData* rec,
+                                  const std::string& narrow_encoding) {
     if (field->GetNull(rec))
         return nb::none();
 
@@ -247,7 +261,7 @@ static nb::object field_to_python(const FieldBase* field, const RecordData* rec)
         case E_FT_String:
         case E_FT_V_String: {
             auto val = field->GetAsAString(rec);
-            return narrow_to_python_str(val.value.pValue, val.value.nLength);
+            return narrow_to_python_str(field, val.value.pValue, val.value.nLength, narrow_encoding);
         }
         case E_FT_WString:
         case E_FT_V_WString: {
@@ -352,9 +366,13 @@ class YXDBReader {
     std::vector<FieldInfo> m_schema;
     bool m_open = false;
     bool m_isE2 = false;
+    std::string m_narrowEncoding;
 
 public:
-    YXDBReader(const std::string& path, bool allow_unverified_types = false) {
+    YXDBReader(const std::string& path, bool allow_unverified_types = false,
+               const std::string& narrow_encoding = "latin-1")
+        : m_narrowEncoding(narrow_encoding) {
+        check_codec(narrow_encoding);
         m_isE2 = is_e2_file(path);
         if (m_isE2) {
             m_e2 = std::make_unique<Alteryx::OpenYXDB::e2::E2Reader>(path);
@@ -441,7 +459,7 @@ public:
             if (!rec) break;
             nb::dict row;
             for (size_t f = 0; f < m_fields.size(); ++f) {
-                row[nb::cast(m_schema[f].name)] = field_to_python(m_fields[f], rec);
+                row[nb::cast(m_schema[f].name)] = field_to_python(m_fields[f], rec, m_narrowEncoding);
             }
             rows.append(row);
         }
@@ -476,7 +494,7 @@ public:
             const RecordData* rec = m_db.ReadRecord();
             if (!rec) break;
             for (size_t f = 0; f < nFields; ++f) {
-                columns[f].append(field_to_python(m_fields[f], rec));
+                columns[f].append(field_to_python(m_fields[f], rec, m_narrowEncoding));
             }
         }
 
@@ -563,7 +581,7 @@ public:
                 if (!rec) break;
                 for (size_t p = 0; p < nProj; ++p) {
                     columns_out[p].append(
-                        field_to_python(m_fields[proj_indices[p]], rec));
+                        field_to_python(m_fields[proj_indices[p]], rec, m_narrowEncoding));
                 }
             }
         }
@@ -637,6 +655,7 @@ class YXDBWriter {
     std::string m_finalPath;
     std::string m_tmpPath;
     int64_t m_rowsWritten = 0;
+    std::string m_narrowEncoding;
     bool m_open = false;
 
     // <path>.<pid>-<n>.partial: unique per writer, so two writers aimed at one
@@ -695,8 +714,10 @@ class YXDBWriter {
     }
 
 public:
-    YXDBWriter(const std::string& path, const std::vector<FieldInfo>& schema)
-        : m_finalPath(path), m_tmpPath(partial_name(path)) {
+    YXDBWriter(const std::string& path, const std::vector<FieldInfo>& schema,
+               const std::string& narrow_encoding = "latin-1")
+        : m_finalPath(path), m_tmpPath(partial_name(path)), m_narrowEncoding(narrow_encoding) {
+        check_codec(narrow_encoding);
         if (schema.empty())
             raise_error(ErrorKind::Schema, "a Writer needs at least one field");
         WString xml;
@@ -907,7 +928,7 @@ private:
                             + " cannot be stored in a " + field_type_name(field->m_ft) + " field");
         };
         try {
-            set_field_from_python(field, rec, val);
+            set_field_from_python(field, rec, val, m_narrowEncoding);
         } catch (const nb::cast_error&) {  // also std::bad_cast
             cannot_store();
         } catch (const nb::builtin_exception&) {
@@ -929,7 +950,8 @@ private:
         }
     }
 
-    static void set_field_from_python(const FieldBase* field, Record* rec, nb::handle val) {
+    static void set_field_from_python(const FieldBase* field, Record* rec, nb::handle val,
+                                      const std::string& narrow_encoding) {
         switch (field->m_ft) {
             case E_FT_Bool:
                 field->SetFromBool(rec, nb::cast<bool>(val));
@@ -966,7 +988,24 @@ private:
                 break;
             }
             case E_FT_String:
-            case E_FT_V_String:
+            case E_FT_V_String: {
+                // One fixed encoding for the whole file; characters the encoding
+                // cannot represent raise instead of being replaced.
+                if (!PyUnicode_Check(val.ptr()))
+                    throw nb::type_error("expected str for a String field");
+                PyObject* enc = PyUnicode_AsEncodedString(val.ptr(), narrow_encoding.c_str(), "strict");
+                if (!enc) {
+                    PyErr_Clear();
+                    raise_error(ErrorKind::Conversion,
+                                "value " + nb::cast<std::string>(nb::repr(val))
+                                    + " cannot be encoded as " + narrow_encoding
+                                    + "; pass a different narrow_encoding");
+                }
+                nb::object keep = nb::steal(enc);
+                field->SetFromString(rec, PyBytes_AS_STRING(enc),
+                                     static_cast<size_t>(PyBytes_GET_SIZE(enc)));
+                break;
+            }
             case E_FT_Date:
             case E_FT_Time:
             case E_FT_DateTime: {
@@ -1110,8 +1149,11 @@ NB_MODULE(_openyxdb, m) {
         });
 
     nb::class_<YXDBReader>(m, "Reader")
-        .def(nb::init<const std::string&, bool>(),
-             "path"_a, "allow_unverified_types"_a = false)
+        .def(nb::init<const std::string&, bool, const std::string&>(),
+             "path"_a, "allow_unverified_types"_a = false,
+             "narrow_encoding"_a = "latin-1",
+             "narrow_encoding: codec used for every String and V_String value "
+             "(E1 files). The default, latin-1, decodes any byte.")
         .def("close", &YXDBReader::close)
         .def_prop_ro("format", &YXDBReader::format,
                      "Detected file format: 'E1' (original) or 'E2' (AMP engine).")
@@ -1130,8 +1172,10 @@ NB_MODULE(_openyxdb, m) {
         .def("__exit__", [](YXDBReader& self, nb::args) { self.close(); });
 
     nb::class_<YXDBWriter>(m, "Writer")
-        .def(nb::init<const std::string&, const std::vector<FieldInfo>&>(),
-             "path"_a, "schema"_a)
+        .def(nb::init<const std::string&, const std::vector<FieldInfo>&, const std::string&>(),
+             "path"_a, "schema"_a, "narrow_encoding"_a = "latin-1",
+             "narrow_encoding: codec used for every String and V_String value. "
+             "Characters it cannot encode raise ConversionError.")
         .def("close", &YXDBWriter::close)
         .def("write_record", &YXDBWriter::write_record, "row"_a,
              "Write a single record from a dict")
