@@ -18,11 +18,25 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   `OpenYXDBPermissionError`, which are also `FileNotFoundError` and
   `PermissionError`, with `errno` and `filename` set.
 
+### Fixed
+
+- E1 reader: field type names are matched exactly (case-insensitive) against
+  the 17 known names. Previously a name was classified by a few of its
+  characters, so an unrecognised name could be read as a real type with the
+  wrong record width.
+- E1 reader: a compression version other than 0 or 1, a negative record
+  count, a header that does not start with "Alteryx Database File", and a
+  schema with no `RecordInfo` element or no `Field` elements now raise.
+- E1 reader: a file whose writer never finalized the header (record block
+  index position still zero) now raises instead of reading as an empty file.
+
 ### Behavior changes
 
 - Errors raised from C++ are now `OpenYXDBError` subclasses instead of
   `RuntimeError`. Code that catches `RuntimeError` for file and schema errors
   must catch `OpenYXDBError` (or `OSError` for I/O errors).
+- E1 files with file version other than 4 or 5 now raise. No file in the
+  1001-file test corpus uses another version.
 
 ## [1.5.0] - 2026-09-19
 

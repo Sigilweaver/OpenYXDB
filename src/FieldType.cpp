@@ -2,12 +2,6 @@
 
 #include "FieldType.h"
 
-#define ASSERTANDRETURNFT(Value, Type)                                                                                 \
-	{                                                                                                                  \
-		assert(SRC::String::CompareNoCase(Value, p) == 0);                                                             \
-		return Type;                                                                                                   \
-	}
-
 namespace SRC {
 const String& GetNameFromFieldType(E_FieldType ft)
 {
@@ -16,10 +10,30 @@ const String& GetNameFromFieldType(E_FieldType ft)
 		_U("Int64"),    _U("FixedDecimal"), _U("Float"),     _U("Double"), _U("String"),
 		_U("WString"),  _U("V_String"),     _U("V_WString"), _U("Date"),   _U("Time"),
 		_U("DateTime"), _U("Blob"),         _U("SpatialObj")
-		// GetFieldTypeFromName hardcodes this list - if change, must change there
+		// GetFieldTypeFromName matches against this list
 	};
 
 	return s_pE_FieldTypeNames[ft];
+}
+
+// ASCII case-insensitive equality between a UTF-16/char name and an ASCII-only
+// known name. Anything that is not an exact match, including prefixes and
+// longer strings, is not equal.
+static bool NameEquals(const String::TChar* p, const String& known)
+{
+	const String::TChar* k = known.c_str();
+	for (; *k; ++k, ++p)
+	{
+		unsigned c = static_cast<unsigned>(*p);
+		if (c >= 'A' && c <= 'Z')
+			c += 'a' - 'A';
+		unsigned kc = static_cast<unsigned>(*k);
+		if (kc >= 'A' && kc <= 'Z')
+			kc += 'a' - 'A';
+		if (c != kc)
+			return false;
+	}
+	return *p == 0;
 }
 
 E_FieldType GetFieldTypeFromName(const String::TChar* p)
@@ -27,55 +41,12 @@ E_FieldType GetFieldTypeFromName(const String::TChar* p)
 	if (!p)
 		return E_FT_Unknown;
 
-	switch (p[0])
+	// Index 0 is "Unknown", which is not a valid name in a file.
+	for (int ft = E_FT_Unknown + 1; ft <= E_FT_SpatialObj; ++ft)
 	{
-		case 0:
-			// special case for an empty string to give Unknown
-			return E_FT_Unknown;
-		case 'B':
-		case 'b':
-			if (p[1] == 'o' || p[1] == 'O')
-				ASSERTANDRETURNFT(_U("Bool"), E_FT_Bool)
-			else if (p[1] == 'l' || p[1] == 'L')
-				ASSERTANDRETURNFT(_U("Blob"), E_FT_Blob)
-			ASSERTANDRETURNFT(_U("Byte"), E_FT_Byte)
-		case 'I':
-		case 'i':
-			if (p[3] == '1')
-				ASSERTANDRETURNFT(_U("Int16"), E_FT_Int16)
-			else if (p[3] == '3')
-				ASSERTANDRETURNFT(_U("Int32"), E_FT_Int32)
-			ASSERTANDRETURNFT(_U("Int64"), E_FT_Int64)
-		case 'F':
-		case 'f':
-			if (p[1] == 'i' || p[1] == 'I')
-				ASSERTANDRETURNFT(_U("FixedDecimal"), E_FT_FixedDecimal)
-			ASSERTANDRETURNFT(_U("Float"), E_FT_Float)
-		case 'D':
-		case 'd':
-			if (p[1] == 'o' || p[1] == 'O')
-				ASSERTANDRETURNFT(_U("Double"), E_FT_Double)
-			else if (p[4] == 0)
-				ASSERTANDRETURNFT(_U("Date"), E_FT_Date)
-			ASSERTANDRETURNFT(_U("DateTime"), E_FT_DateTime)
-		case 'S':
-		case 's':
-			if (p[1] == 't' || p[1] == 'T')
-				ASSERTANDRETURNFT(_U("String"), E_FT_String)
-			ASSERTANDRETURNFT(_U("SpatialObj"), E_FT_SpatialObj)
-		case 'W':
-		case 'w':
-			ASSERTANDRETURNFT(_U("WString"), E_FT_WString)
-		case 'V':
-		case 'v':
-			if (p[2] == 's' || p[2] == 'S')
-				ASSERTANDRETURNFT(_U("V_String"), E_FT_V_String)
-			ASSERTANDRETURNFT(_U("V_WString"), E_FT_V_WString)
-		case 'T':
-		case 't':
-			ASSERTANDRETURNFT(_U("Time"), E_FT_Time)
+		if (NameEquals(p, GetNameFromFieldType(static_cast<E_FieldType>(ft))))
+			return static_cast<E_FieldType>(ft);
 	}
-	assert(0 && "Unknown field type in GetFieldTypeFromName");
 	return E_FT_Unknown;
 }
 }  // namespace SRC

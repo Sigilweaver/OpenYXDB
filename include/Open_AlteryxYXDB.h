@@ -164,6 +164,7 @@ private:
 	bool m_bIndexStartsBlock;
 
 	void GoBlockRecord(int64_t nRecord);
+	void ValidateHeader();
 
 	std::unique_ptr<LZFBufferedInput<File_Large*>> m_pCompressInput;
 	std::unique_ptr<LZFBufferedOutput<File_Large*, GenericEngineBase>> m_pCompressOutput;
