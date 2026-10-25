@@ -88,6 +88,20 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   encoded bytes. Any ASCII-compatible Python codec name is accepted; codecs
   that add a prefix or widen ASCII (utf-16, utf-32, utf-8-sig) raise
   `UnsupportedError`.
+- Reader: a FixedDecimal value that is not entirely a decimal number (for
+  example `12abc`) raises `ConversionError` instead of returning the digits
+  before the bad character. Values are the correctly rounded double of the
+  stored text.
+- Reader: `read_columns`, `read_records`, `read_columns_subset`, `to_pyarrow`
+  and `scan_yxdb` raise `SchemaError` when two fields share a name, instead
+  of returning one column that holds only the later field. (E1 files never
+  reach this: the E1 reader renames duplicates to `name2`, `name3`.)
+- `scan_yxdb` raises `FormatError` when a batch comes back shorter than the
+  file's record count, instead of ending the scan early without notice.
+- E2: a decoded cell whose kind does not match the field type raises
+  `FormatError` instead of becoming NULL.
+- A read that runs out of records before the declared count raises instead
+  of returning fewer rows.
 
 ### Behavior changes
 

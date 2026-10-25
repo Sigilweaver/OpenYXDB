@@ -277,10 +277,32 @@ static nb::object field_to_python(const FieldBase* field, const RecordData* rec,
             return nb::cast(val.value);
         }
         case E_FT_Float:
-        case E_FT_Double:
-        case E_FT_FixedDecimal: {
+        case E_FT_Double: {
             auto val = field->GetAsDouble(rec);
             return nb::cast(val.value);
+        }
+        case E_FT_FixedDecimal: {
+            // Stored as text. The whole text must be a plain decimal number;
+            // the library's lenient parser would stop at the first bad
+            // character and return the digits before it.
+            auto val = field->GetAsAString(rec);
+            if (val.value.nLength == 0) return nb::none();
+            const char* t = val.value.pValue;
+            size_t n = val.value.nLength;
+            size_t i = 0;
+            if (t[i] == '-' || t[i] == '+') ++i;
+            size_t digits = 0;
+            while (i < n && t[i] >= '0' && t[i] <= '9') { ++i; ++digits; }
+            if (i < n && t[i] == '.') {
+                ++i;
+                while (i < n && t[i] >= '0' && t[i] <= '9') { ++i; ++digits; }
+            }
+            if (i != n || digits == 0)
+                raise_error(ErrorKind::Conversion,
+                            "FixedDecimal field '"
+                                + wstring_to_utf8(WString(field->GetFieldName().c_str()), false)
+                                + "' holds '" + std::string(t, n) + "', which is not a number");
+            return nb::cast(std::strtod(std::string(t, n).c_str(), nullptr));
         }
         case E_FT_Date:
         case E_FT_Time:
@@ -320,17 +342,17 @@ static nb::object e2_cell_to_python(const Alteryx::OpenYXDB::e2::E2Cell& c,
     switch (ft) {
         case FT::Bool:
             if (c.kind == K::Bool) return nb::cast(c.boolean);
-            return nb::none();
+            break;
         case FT::Byte:
         case FT::Int16:
         case FT::Int32:
         case FT::Int64:
             if (c.kind == K::Int64) return nb::cast(c.integer);
-            return nb::none();
+            break;
         case FT::Float:
         case FT::Double:
             if (c.kind == K::Double) return nb::cast(c.real);
-            return nb::none();
+            break;
         case FT::String:
         case FT::WString:
         case FT::V_String:
@@ -340,20 +362,22 @@ static nb::object e2_cell_to_python(const Alteryx::OpenYXDB::e2::E2Cell& c,
         case FT::DateTime:
         case FT::FixedDecimal:
             if (c.kind == K::Text) return nb::cast(c.text);
-            if (c.kind == K::Bytes) {
-                // Unresolved blob ref -> treat as null
-                return nb::none();
-            }
-            return nb::none();
+            break;
         case FT::Blob:
         case FT::SpatialObj:
             if (c.kind == K::Bytes)
                 return nb::bytes(reinterpret_cast<const char*>(c.bytes.data()),
                                  c.bytes.size());
-            return nb::none();
+            break;
     }
-    return nb::none();
+    // A decoded cell whose kind does not match the declared type means the
+    // record layout was misread; do not turn it into a NULL.
+    raise_error(ErrorKind::Format,
+                "E2: decoded cell of kind " + std::to_string(static_cast<int>(c.kind))
+                    + " does not match declared field type "
+                    + std::to_string(static_cast<int>(ft)));
 }
+
 
 // Sniff the first bytes of a file and return true if it looks like an E2
 // (AMP-engine) YXDB. Reads up to 24 bytes; missing file -> false (the E1
@@ -463,6 +487,7 @@ public:
 
     // Read all records as a list of dicts (column-name -> value)
     nb::list read_records() {
+        require_unique_names();
         nb::list rows;
         if (m_isE2) {
             // Build columns via the E2 reader, then transpose to row dicts.
@@ -486,7 +511,9 @@ public:
         m_db.GoRecord(0);
         for (int64_t i = 0; i < n; ++i) {
             const RecordData* rec = m_db.ReadRecord();
-            if (!rec) break;
+            if (!rec)
+                    raise_error(ErrorKind::Format,
+                                "file ended before the declared record count");
             nb::dict row;
             for (size_t f = 0; f < m_fields.size(); ++f) {
                 row[nb::cast(m_schema[f].name)] = field_to_python(m_fields[f], rec, m_narrowEncoding, i);
@@ -498,6 +525,7 @@ public:
 
     // Read all records in columnar format: dict of column-name -> list of values
     nb::dict read_columns() {
+        require_unique_names();
         if (m_isE2) {
             std::vector<std::vector<Alteryx::OpenYXDB::e2::E2Cell>> cols;
             m_e2->ReadAllColumns(cols);
@@ -522,7 +550,9 @@ public:
             m_db.GoRecord(0);
         for (int64_t i = 0; i < n; ++i) {
             const RecordData* rec = m_db.ReadRecord();
-            if (!rec) break;
+            if (!rec)
+                    raise_error(ErrorKind::Format,
+                                "file ended before the declared record count");
             for (size_t f = 0; f < nFields; ++f) {
                 columns[f].append(field_to_python(m_fields[f], rec, m_narrowEncoding, i));
             }
@@ -578,6 +608,8 @@ public:
             }
         }
 
+        require_unique_names(columns.has_value() ? &proj_indices : nullptr);
+
         if (m_isE2) {
             std::vector<std::vector<Alteryx::OpenYXDB::e2::E2Cell>> cols;
             int64_t off = offset < 0 ? 0 : offset;
@@ -608,7 +640,9 @@ public:
             m_db.GoRecord(offset);
             for (int64_t i = 0; i < to_read; ++i) {
                 const RecordData* rec = m_db.ReadRecord();
-                if (!rec) break;
+                if (!rec)
+                    raise_error(ErrorKind::Format,
+                                "file ended before the declared record count");
                 for (size_t p = 0; p < nProj; ++p) {
                     columns_out[p].append(
                         field_to_python(m_fields[proj_indices[p]], rec, m_narrowEncoding, offset + i));
@@ -621,6 +655,29 @@ public:
             result[nb::cast(proj_names[p])] = columns_out[p];
         }
         return result;
+    }
+
+    // Results are dicts keyed by field name, so two fields with the same name
+    // cannot both be returned; raise instead of keeping only the last one.
+    void require_unique_names(const std::vector<size_t>* proj = nullptr) const {
+        std::unordered_map<std::string, size_t> first;
+        auto check = [&](size_t i) {
+            auto ins = first.emplace(m_schema[i].name, i);
+            if (!ins.second)
+                raise_error(ErrorKind::Schema,
+                            "fields " + std::to_string(ins.first->second) + " and " + std::to_string(i)
+                                + " are both named '" + m_schema[i].name
+                                + "'; results keyed by name cannot hold both");
+        };
+        if (proj) {
+            // Only the requested names need to be unambiguous in the schema.
+            std::unordered_set<std::string> wanted;
+            for (size_t i : *proj) wanted.insert(m_schema[i].name);
+            for (size_t i = 0; i < m_schema.size(); ++i)
+                if (wanted.count(m_schema[i].name)) check(i);
+        } else {
+            for (size_t i = 0; i < m_schema.size(); ++i) check(i);
+        }
     }
 
     // Context manager support
