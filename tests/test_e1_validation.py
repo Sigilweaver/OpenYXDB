@@ -111,3 +111,10 @@ def test_schema_without_fields_raises(valid):
     p.write_bytes(replace_utf16(data, "<Field ", "<Fiel_ "))
     with pytest.raises(RuntimeError, match="no RecordInfo"):
         read_all(p)
+
+
+def test_truncated_file_reports_sizes_not_errno(valid):
+    p, data = valid
+    p.write_bytes(data[:-60])
+    with pytest.raises(RuntimeError, match=r"expected \d+ bytes at offset \d+ but got \d+"):
+        read_all(p)

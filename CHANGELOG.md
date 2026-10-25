@@ -30,6 +30,10 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - E1 reader: a file whose writer never finalized the header (record block
   index position still zero) now raises instead of reading as an empty file.
 
+- Short-read errors from the E1 reader report the expected and actual byte
+  counts and the file offset instead of a stale `errno` string such as
+  "Invalid argument" or "Success".
+
 ### Behavior changes
 
 - Errors raised from C++ are now `OpenYXDBError` subclasses instead of

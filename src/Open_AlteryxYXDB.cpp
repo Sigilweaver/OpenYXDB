@@ -145,18 +145,26 @@ void File_Large::LSeek(int64_t nPos)
 
 unsigned File_Large::Read(void* _pBuffer, unsigned nNumBytesToRead)
 {
-	unsigned ret = 0;
+	int64_t nStartPos = Tell();
 
 #ifdef __GNUG__
-	ret = read(m_iFileDescriptor, _pBuffer, nNumBytesToRead);
+	ssize_t ret = read(m_iFileDescriptor, _pBuffer, nNumBytesToRead);
 #else
-	ret = _read(m_iFileDescriptor, _pBuffer, nNumBytesToRead);
+	int ret = _read(m_iFileDescriptor, _pBuffer, nNumBytesToRead);
 #endif
 
-	if (ret != nNumBytesToRead)
-		ThrowOsError(U16("Error in Read: Unexpected number of bytes to read"));
+	if (ret < 0)
+		ThrowOsError(U16("Error in Read: "));
 
-	return ret;
+	if (static_cast<unsigned>(ret) != nNumBytesToRead)
+	{
+		// A short read is not an OS error, so errno is not meaningful here.
+		std::string msg = "Error in Read: expected " + std::to_string(nNumBytesToRead) + " bytes at offset "
+			+ std::to_string(nStartPos) + " but got " + std::to_string(ret) + " (unexpected end of file)";
+		throw Error(AString(msg.c_str()));
+	}
+
+	return static_cast<unsigned>(ret);
 }
 
 unsigned File_Large::Write(const void* _pBuffer, unsigned nNumBytesToWrite)
