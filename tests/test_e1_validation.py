@@ -118,5 +118,24 @@ def test_schema_without_fields_raises(valid):
 def test_truncated_file_reports_sizes_not_errno(valid):
     p, data = valid
     p.write_bytes(data[:-60])
-    with pytest.raises(openyxdb.OpenYXDBIOError, match=r"expected \d+ bytes at offset \d+ but got \d+"):
+    with pytest.raises(openyxdb.FormatError, match=r"expected \d+ bytes at offset \d+ but got \d+"):
+        read_all(p)
+
+
+def test_file_shorter_than_the_header_is_a_format_error(tmp_path):
+    p = tmp_path / "short.yxdb"
+    p.write_bytes(b"Alteryx Database File" + b"\0" * 100)
+    with pytest.raises(openyxdb.FormatError, match="expected 512 bytes"):
+        read_all(p)
+
+
+def test_zero_length_string_field_is_a_schema_error(tmp_path):
+    from e1_files import field
+    from openyxdb._openyxdb import Writer
+
+    p = tmp_path / "zero.yxdb"
+    with Writer(str(p), [field("s", "String", 12)]) as w:
+        w.write_record({"s": "x"})
+    p.write_bytes(replace_utf16(p.read_bytes(), 'size="12"', 'size="00"'))
+    with pytest.raises(openyxdb.SchemaError, match="0 length"):
         read_all(p)

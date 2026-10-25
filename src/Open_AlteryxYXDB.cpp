@@ -158,10 +158,11 @@ unsigned File_Large::Read(void* _pBuffer, unsigned nNumBytesToRead)
 
 	if (static_cast<unsigned>(ret) != nNumBytesToRead)
 	{
-		// A short read is not an OS error, so errno is not meaningful here.
+		// The file ended before the content it declares: a malformed file, not
+		// an OS error.
 		std::string msg = "Error in Read: expected " + std::to_string(nNumBytesToRead) + " bytes at offset "
 			+ std::to_string(nStartPos) + " but got " + std::to_string(ret) + " (unexpected end of file)";
-		throw Error(ErrorKind::IO, AString(msg.c_str()));
+		throw Error(ErrorKind::Format, AString(msg.c_str()));
 	}
 
 	return static_cast<unsigned>(ret);

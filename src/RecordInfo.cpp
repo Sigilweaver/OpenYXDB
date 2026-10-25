@@ -331,7 +331,7 @@ StringNoCase RecordInfo::ValidateFieldName(
 		}
 		if ((++nDups) >= numDupsToTry)
 		{
-			throw SRC::Error(XMSG(
+			throw SRC::Error(ErrorKind::Schema, XMSG(
 				"Could not generate a unique name for field <@1>, number @2, after attempting @3 generated names",
 				strFieldNameOrig,
 				String(int(nFieldNum + 1u)),
@@ -397,10 +397,10 @@ const FieldBase* RecordInfo::AddField(const FieldSchema& fieldSchema, bool bIssu
 						String(int(MaxFixedDecimalPrecision))));
 
 			if (fieldSchema.m_nSize <= 0)
-				throw Error(XMSG("Field: \"@1\" is 0 length.", fieldSchema.GetFieldName()));
+				throw Error(ErrorKind::Schema, XMSG("Field: \"@1\" is 0 length.", fieldSchema.GetFieldName()));
 
 			if (fieldSchema.m_nSize < 2 && fieldSchema.m_nScale > 0)
-				throw Error(XMSG(
+				throw Error(ErrorKind::Schema, XMSG(
 					"Field: \"@1\" has too large a scale (@2) for the precision (@3).",
 					fieldSchema.GetFieldName(),
 					String(fieldSchema.m_nScale),
@@ -409,7 +409,7 @@ const FieldBase* RecordInfo::AddField(const FieldSchema& fieldSchema, bool bIssu
 			if (fieldSchema.m_nScale > 0
 				&& unsigned(fieldSchema.m_nScale)
 					   > (fieldSchema.m_nSize - 2))  // subtract 2: 1 for the sign and 1 for the decimal point
-				throw Error(XMSG(
+				throw Error(ErrorKind::Schema, XMSG(
 					"Field: \"@1\" has too large a scale (@2) for the precision (@3).",
 					fieldSchema.GetFieldName(),
 					String(fieldSchema.m_nScale),
@@ -493,7 +493,7 @@ void RecordInfo::AddField(SmartPointerRefObj<FieldBase> pField, bool bIssueWarni
 {
 	if (NumFields() >= unsigned(GetMaxFieldsLimit()))
 	{
-		throw Error(XMSG(
+		throw Error(ErrorKind::Schema, XMSG(
 			"Number of fields is larger than the @1 limit. Please reduce the number of fields.",
 			String(GetMaxFieldsLimit())));
 	}
@@ -508,7 +508,7 @@ void RecordInfo::AddField(SmartPointerRefObj<FieldBase> pField, bool bIssueWarni
 	int64_t tsize = static_cast<int64_t>(m_nFixedRecordSize) + static_cast<int64_t>(pField->m_nRawSize);
 	if (tsize > MaxFieldLength)
 	{
-		throw SRC::Error(XMSG(
+		throw SRC::Error(ErrorKind::Schema, XMSG(
 			"Record too big:  Records are limited to @1 bytes. Trying to make a record with @2 bytes, when adding field named '@3'",
 			String(static_cast<int64_t>(MaxFieldLength)),
 			String(tsize),
@@ -571,7 +571,7 @@ const FieldBase* RecordInfo::AddField(
 	bool bIssueWarnings)
 {
 	if (nSize < 0)
-		throw Error(XMSG("Field: \"@1\" is 0 length.", strName));
+		throw Error(ErrorKind::Schema, XMSG("Field: \"@1\" is 0 length.", strName));
 
 	return AddField(
 		FieldSchema(std::move(strName), ft, unsigned(nSize), nScale, std::move(strSource), std::move(strDescription)),
@@ -715,7 +715,7 @@ int RecordInfo::GetFieldNum(StringNoCase strField, bool bThrowError /*= true*/) 
 	{
 		if (bThrowError)
 			throw Error(
-				XMSG("The field \"@1\" is missing. Compare the tool configuration with the input stream.", strField));
+				ErrorKind::Schema, XMSG("The field \"@1\" is missing. Compare the tool configuration with the input stream.", strField));
 		else
 			return -1;
 	}

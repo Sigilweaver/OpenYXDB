@@ -13,10 +13,10 @@ void Record::Allocate(unsigned nNewMinimumVarDataSize)
 	if (nMinSize > MaxFieldLength)
 	{
 		if (nMinSize < MaxFieldLength64)
-			throw Error(XMSG(
+			throw Error(ErrorKind::Format, XMSG(
 				"This file has large records that are not supported by the 32 bit version.  Use the 64 bit version instead."));
 		throw Error(
-			XMSG("Record too big:  Records are limited to @1 bytes.", String(static_cast<int64_t>(MaxFieldLength))));
+			ErrorKind::Format, XMSG("Record too big:  Records are limited to @1 bytes.", String(static_cast<int64_t>(MaxFieldLength))));
 	}
 
 	if (m_nCurrentBufferSize < nMinSize)
@@ -66,7 +66,7 @@ int Record::AddVarData(const void* pVarData, unsigned nLen)
 {
 	if ((m_nFixedRecordSize + 4 + m_nCurrentVarDataSize + nLen) > MaxFieldLength)
 	{
-		throw SRC::Error(XMSG(
+		throw SRC::Error(ErrorKind::Conversion, XMSG(
 			"Record too big:  Records are limited to @1 bytes", SRC::String(static_cast<int64_t>(MaxFieldLength))));
 	}
 

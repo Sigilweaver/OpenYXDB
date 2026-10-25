@@ -102,7 +102,7 @@ FieldSchema FieldSchema::FromXML(
 	String strSize = MINIXML_NAMESPACE::MiniXmlParser::GetAttribute(tagField, _U("size"), false);
 	int nSize = strSize.ConvertToInt();
 	if (nSize <= 0 && IsString(ft))
-		throw Error(XMSG("Field: \"@1\" is 0 length.", strName));
+		throw Error(ErrorKind::Schema, XMSG("Field: \"@1\" is 0 length.", strName));
 	String strSource(MINIXML_NAMESPACE::MiniXmlParser::GetAttribute(tagField, _U("source"), false));
 	String strDescription(MINIXML_NAMESPACE::MiniXmlParser::GetAttribute(tagField, _U("description"), false));
 

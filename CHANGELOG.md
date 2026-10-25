@@ -29,9 +29,14 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   schema with no `RecordInfo` element or no `Field` elements now raise.
 - E1 reader: a file whose writer never finalized the header (record block
   index position still zero) now raises instead of reading as an empty file.
-- Short-read errors from the E1 reader report the expected and actual byte
-  counts and the file offset instead of a stale `errno` string such as
-  "Invalid argument" or "Success".
+- A file that ends before the content it declares raises `FormatError` that
+  reports the expected and actual byte counts and the file offset, instead of
+  an I/O error carrying a stale `errno` string such as "Invalid argument" or
+  "Success". `OpenYXDBIOError` is kept for failures reported by the operating
+  system.
+- Schema errors found while loading field definitions (a zero-length string
+  field, a scale larger than the precision, too many fields, a record that is
+  too large) are `SchemaError`.
 
 ### Behavior changes
 
