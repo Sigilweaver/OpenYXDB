@@ -243,3 +243,13 @@ def test_attribute_names_match_whole_words(tmp_path: Path) -> None:
     path = _write_e2(tmp_path / "attr.yxdb", [], b"\x89" + b"123456789", xml_override=xml)
     with Reader(str(path)) as reader:
         assert [f.name for f in reader.schema] == ["real"]
+
+
+def test_empty_block_with_payload_raises(tmp_path: Path) -> None:
+    path = _write_e2(
+        tmp_path / "empty-payload.yxdb", [("value", "Blob")], b"\x89" + b"123456789",
+        record_count=0,
+    )
+    with Reader(str(path)) as reader:
+        with pytest.raises(openyxdb.FormatError, match="declares no records"):
+            reader.read_columns()

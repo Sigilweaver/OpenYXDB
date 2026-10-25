@@ -767,7 +767,7 @@ size_t TryDecodeRecord(const std::vector<E2FieldMeta>& fields,
             }
             off += c;
             if (is_date) first_date = false;
-        } catch (...) {
+        } catch (const E2FormatError&) {
             return off;
         }
     }
@@ -839,7 +839,7 @@ bool DecodeRecordUniform(const std::vector<E2FieldMeta>& fields,
             off += consumed;
             if (is_date) first_date = false;
         }
-    } catch (...) {
+    } catch (const E2FormatError&) {
         output.clear();
         return false;
     }
@@ -935,7 +935,7 @@ MixedDecodeResult DecodeRecordMixedUnique(
                     duplicate = duplicate || decoded[j].consumed == consumed;
                 if (!duplicate)
                     decoded[count++] = {std::move(cell), consumed, bases[i]};
-            } catch (...) {
+            } catch (const E2FormatError&) {
                 // This base is not valid at this byte offset.
             }
         }
@@ -997,7 +997,13 @@ void FrameRecords(const std::vector<uint8_t>& block, std::vector<Span>& out) {
     if (block.size() < 12) Fail("E2: decompressed block < 12 bytes");
     uint32_t rec_count = LoadU32LE(block.data() + 4);
     uint32_t first_size = LoadU32LE(block.data() + 8) & 0x7FFFFFFFu;
-    if (rec_count == 0) return;
+    if (rec_count == 0) {
+        // An empty block has nothing after its header.
+        if (block.size() != 12)
+            Fail("E2: " + std::to_string(block.size() - 12) +
+                 " unread bytes in a block that declares no records");
+        return;
+    }
     const size_t max_records = 1 + (block.size() - 12) / 4;
     if (rec_count > max_records)
         Fail("E2: record count exceeds framed block capacity");

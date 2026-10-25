@@ -113,8 +113,12 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   instead of returning the rows read so far.
 - E2: a `<Field>` element without a name or type raises, and attribute names in
   the metadata match whole words (`rename` is no longer read as `name`).
+- E2: a block that declares no records must contain nothing after its header.
 - E2: an inline blob reference seen after more than one blob block raises,
   because the reference does not say which block it points into.
+- E2: only format errors mean "this is not the right record layout" while the
+  reader probes candidate layouts; any other error (running out of memory, a
+  bug) propagates instead of being read as a wrong layout.
 
 ### Behavior changes
 
