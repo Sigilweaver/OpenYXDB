@@ -24,4 +24,6 @@ def corpus_files(layout: str) -> list[Path]:
     directory = corpus_dir(layout)
     if not directory.is_dir():
         return []
-    return sorted(p for p in directory.glob("*.yxdb") if p.is_file())
+    return sorted(
+        p for p in directory.iterdir() if p.suffix.lower() == ".yxdb" and p.is_file()
+    )

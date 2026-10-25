@@ -92,3 +92,19 @@ def test_high_level_functions_take_the_encoding(p):
     assert openyxdb.read_yxdb(p, narrow_encoding="cp1252") == {"s": ["€"]}
     with pytest.raises(openyxdb.ConversionError):
         openyxdb.read_yxdb(p)
+
+
+@pytest.mark.parametrize("codec", ["utf-16", "utf-32", "utf-8-sig", "utf-16-le"])
+def test_codecs_that_cannot_round_trip_a_byte_string_are_refused(p, codec):
+    with pytest.raises(openyxdb.UnsupportedError, match="ASCII"):
+        Writer(str(p), [fi("s", "V_String", 3)], narrow_encoding=codec)
+    with pytest.raises(openyxdb.UnsupportedError, match="ASCII"):
+        Reader(str(p), narrow_encoding=codec)
+
+
+@pytest.mark.parametrize("codec", ["utf-8", "cp1252", "latin-1", "ascii", "cp437", "gbk", "shift_jis"])
+def test_ascii_compatible_codecs_are_accepted(p, codec):
+    with Writer(str(p), [fi("s", "V_String", 8)], narrow_encoding=codec) as w:
+        w.write_record({"s": "plain"})
+    with Reader(str(p), narrow_encoding=codec) as r:
+        assert dict(r.read_records()[0])["s"] == "plain"

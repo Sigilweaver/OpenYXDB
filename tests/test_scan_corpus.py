@@ -18,6 +18,12 @@ from openyxdb._openyxdb import Reader
 
 pl = pytest.importorskip("polars")
 
+# The default narrow-string encoding is strict UTF-8, which some corpus files
+# do not satisfy (they hold single-byte text). Latin-1 decodes every byte, so
+# these tests compare scan and eager reads under one encoding that always works.
+READ = {"narrow_encoding": "latin-1"}
+WRITE = {"narrow_encoding": "latin-1"}
+
 ALL_FILES = corpus_files("e1")
 
 if not ALL_FILES:
@@ -38,8 +44,8 @@ FULL_SCAN_FILES = [p for p in ALL_FILES if p.stat().st_size <= _FULL_SCAN_SIZE_C
 )
 def test_scan_full_matches_to_polars(path: Path) -> None:
     """Full lazy collect must equal the eager Polars read."""
-    ref = openyxdb.to_polars(str(path))
-    got = openyxdb.scan_yxdb(str(path)).collect()
+    ref = openyxdb.to_polars(str(path), **READ)
+    got = openyxdb.scan_yxdb(str(path), **READ).collect()
     assert got.height == ref.height, path.name
     assert got.columns == ref.columns, path.name
     assert got.equals(ref), path.name
@@ -50,14 +56,14 @@ def test_scan_head_matches_prefix() -> None:
     # Exercise a range of files, not just one.
     sample = ALL_FILES[:: max(1, len(ALL_FILES) // 20)][:20]
     for path in sample:
-        with Reader(str(path)) as r:
+        with Reader(str(path), **READ) as r:
             n = r.num_records
         if n == 0:
             # head of empty is empty; covered separately.
             continue
         k = min(100, n)
-        ref = openyxdb.to_polars(str(path)).head(k)
-        got = openyxdb.scan_yxdb(str(path)).head(k).collect()
+        ref = openyxdb.to_polars(str(path), **READ).head(k)
+        got = openyxdb.scan_yxdb(str(path), **READ).head(k).collect()
         assert got.height == ref.height, path.name
         assert got.equals(ref), path.name
 
@@ -66,14 +72,14 @@ def test_scan_projection_matches_selection() -> None:
     """``.select(cols).collect()`` must equal the same projection applied eagerly."""
     sample = ALL_FILES[:: max(1, len(ALL_FILES) // 10)][:20]
     for path in sample:
-        with Reader(str(path)) as r:
+        with Reader(str(path), **READ) as r:
             names = [fi.name for fi in r.schema]
         if not names:
             continue
         # Reverse + drop one to ensure order and subset both matter.
         proj = list(reversed(names))[: max(1, len(names) // 2)]
-        ref = openyxdb.to_polars(str(path)).select(proj).head(500)
-        got = openyxdb.scan_yxdb(str(path)).select(proj).head(500).collect()
+        ref = openyxdb.to_polars(str(path), **READ).select(proj).head(500)
+        got = openyxdb.scan_yxdb(str(path), **READ).select(proj).head(500).collect()
         assert got.columns == proj, path.name
         assert got.equals(ref), path.name
 
@@ -87,15 +93,15 @@ def test_scan_offset_via_skip_matches() -> None:
     # Pick a file with enough rows to make offset interesting.
     candidates = []
     for p in ALL_FILES:
-        with Reader(str(p)) as r:
+        with Reader(str(p), **READ) as r:
             if r.num_records >= 50:
                 candidates.append((p, r.num_records))
         if len(candidates) >= 5:
             break
     assert candidates, "no files with >=50 rows in corpus"
     for path, n in candidates:
-        ref = openyxdb.to_polars(str(path)).slice(10, 20)
-        got = openyxdb.scan_yxdb(str(path)).slice(10, 20).collect()
+        ref = openyxdb.to_polars(str(path), **READ).slice(10, 20)
+        got = openyxdb.scan_yxdb(str(path), **READ).slice(10, 20).collect()
         assert got.equals(ref), path.name
 
 
@@ -105,10 +111,10 @@ def test_head_is_near_constant_time() -> None:
     largest = max(ALL_FILES, key=lambda p: p.stat().st_size)
     size_mb = largest.stat().st_size / 1e6
     # Warm caches (OS page cache + any lazy schema init).
-    openyxdb.scan_yxdb(str(largest)).head(10).collect()
+    openyxdb.scan_yxdb(str(largest), **READ).head(10).collect()
 
     t0 = time.perf_counter()
-    df = openyxdb.scan_yxdb(str(largest)).head(1000).collect()
+    df = openyxdb.scan_yxdb(str(largest), **READ).head(1000).collect()
     dt = time.perf_counter() - t0
 
     assert df.height == min(1000, df.height)
@@ -124,20 +130,20 @@ def test_head_is_near_constant_time() -> None:
 def test_projection_reduces_work() -> None:
     """Projection pushdown: selecting 1 column must be faster than full collect."""
     largest = max(ALL_FILES, key=lambda p: p.stat().st_size)
-    with Reader(str(largest)) as r:
+    with Reader(str(largest), **READ) as r:
         names = [fi.name for fi in r.schema]
     if len(names) < 2:
         pytest.skip("need multi-column file for projection timing test")
 
     # Warm
-    openyxdb.scan_yxdb(str(largest)).head(100).collect()
+    openyxdb.scan_yxdb(str(largest), **READ).head(100).collect()
 
     t0 = time.perf_counter()
-    openyxdb.scan_yxdb(str(largest)).collect()
+    openyxdb.scan_yxdb(str(largest), **READ).collect()
     t_full = time.perf_counter() - t0
 
     t0 = time.perf_counter()
-    openyxdb.scan_yxdb(str(largest)).select(names[:1]).collect()
+    openyxdb.scan_yxdb(str(largest), **READ).select(names[:1]).collect()
     t_proj = time.perf_counter() - t0
 
     # Single-column scan should be meaningfully faster than full-column scan.
@@ -153,7 +159,7 @@ def test_unknown_projection_column_raises() -> None:
     path = ALL_FILES[0]
     with pytest.raises(Exception):
         # Polars may wrap the underlying ValueError.
-        openyxdb.scan_yxdb(str(path)).select("__definitely_not_a_column__").collect()
+        openyxdb.scan_yxdb(str(path), **READ).select("__definitely_not_a_column__").collect()
 
 
 # --------------------------------------------------------------------------- #
@@ -175,10 +181,10 @@ def test_sink_yxdb_roundtrip(path: Path, tmp_path: Path) -> None:
     """Round-trip real corpus files through ``sink_yxdb`` and compare."""
     if path.stat().st_size > _FULL_SCAN_SIZE_CAP:
         pytest.skip("file too large for roundtrip in CI")
-    ref = openyxdb.to_polars(str(path))
+    ref = openyxdb.to_polars(str(path), **READ)
     out = tmp_path / "out.yxdb"
-    openyxdb.sink_yxdb(ref.lazy(), out, chunk_size=1024)
-    got = openyxdb.to_polars(str(out))
+    openyxdb.sink_yxdb(ref.lazy(), out, chunk_size=1024, **WRITE)
+    got = openyxdb.to_polars(str(out), **READ)
     assert got.columns == ref.columns, path.name
     assert got.height == ref.height, path.name
     assert got.equals(ref), path.name
@@ -197,14 +203,14 @@ def test_duckdb_roundtrip_corpus(tmp_path: Path) -> None:
         pytest.skip("no small corpus files available")
     path = candidates[0]
 
-    with Reader(str(path)) as r:
+    with Reader(str(path), **READ) as r:
         names = [fi.name for fi in r.schema]
         n = r.num_records
     if n == 0 or not names:
         pytest.skip("empty file")
 
     con = duckdb.connect()
-    openyxdb.register_duckdb(con, "yx", str(path))
+    openyxdb.register_duckdb(con, "yx", str(path), **READ)
 
     count = con.execute("SELECT COUNT(*) FROM yx").fetchone()[0]
     assert count == n
@@ -216,8 +222,9 @@ def test_duckdb_roundtrip_corpus(tmp_path: Path) -> None:
         f'SELECT "{first_col}" FROM yx',
         out,
         con=con,
+        **WRITE,
     )
-    result = openyxdb.to_polars(str(out))
+    result = openyxdb.to_polars(str(out), **READ)
     assert result.columns == [first_col]
     assert result.height == n
 
@@ -234,17 +241,34 @@ def test_scan_head_then_sink(tmp_path: Path) -> None:
         pytest.skip("no suitable files")
     path = candidates[0]
 
-    with Reader(str(path)) as r:
+    with Reader(str(path), **READ) as r:
         n = r.num_records
     if n < 200:
         pytest.skip("file too small to exercise chunking")
 
     out = tmp_path / "piped.yxdb"
-    lf = openyxdb.scan_yxdb(str(path)).head(150)
-    openyxdb.sink_yxdb(lf, out, chunk_size=64)
+    lf = openyxdb.scan_yxdb(str(path), **READ).head(150)
+    openyxdb.sink_yxdb(lf, out, chunk_size=64, **WRITE)
 
-    got = openyxdb.to_polars(str(out))
-    ref = openyxdb.to_polars(str(path)).head(150)
+    got = openyxdb.to_polars(str(out), **READ)
+    ref = openyxdb.to_polars(str(path), **READ).head(150)
     assert got.height == 150
     assert got.equals(ref), path.name
 
+
+
+@pytest.mark.parametrize("path", FULL_SCAN_FILES, ids=lambda p: p.name)
+def test_default_encoding_reads_or_raises_conversion_error(path: Path) -> None:
+    """Strict UTF-8 either reads a file or says why it cannot; never anything else.
+
+    Files that raise hold single-byte text in String or V_String fields. They
+    must read under latin-1, which maps every byte.
+    """
+    try:
+        strict = openyxdb.read_yxdb(str(path))
+    except openyxdb.ConversionError as e:
+        assert "narrow_encoding" in str(e), path.name
+        lenient = openyxdb.read_yxdb(str(path), **READ)
+        assert lenient, path.name
+    else:
+        assert openyxdb.read_yxdb(str(path), **READ).keys() == strict.keys()

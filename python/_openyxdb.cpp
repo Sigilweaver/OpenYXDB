@@ -10,6 +10,7 @@
 #include <cfloat>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <filesystem>
 #include <system_error>
 #include <atomic>
@@ -200,12 +201,26 @@ static E_FieldType field_type_from_name(const std::string& name) {
     raise_error(ErrorKind::Schema, "Unknown field type: " + name);
 }
 
-// Validate that `encoding` names a Python codec.
+// Validate that `encoding` names a Python codec that is ASCII-compatible and
+// adds no prefix (so not utf-16, utf-32 or utf-8-sig): narrow fields hold a
+// plain byte string, and the reader must be able to read back what the writer
+// stores.
 static void check_codec(const std::string& encoding) {
     if (!PyCodec_KnownEncoding(encoding.c_str())) {
         PyErr_Clear();
         raise_error(ErrorKind::Unsupported, "unknown narrow_encoding '" + encoding + "'");
     }
+    PyObject* probe = PyUnicode_AsEncodedString(nb::str("Ab 1").ptr(), encoding.c_str(), "strict");
+    if (!probe) {
+        PyErr_Clear();
+        raise_error(ErrorKind::Unsupported,
+                    "narrow_encoding '" + encoding + "' cannot encode plain ASCII text");
+    }
+    nb::object keep = nb::steal(probe);
+    if (PyBytes_GET_SIZE(probe) != 4 || std::memcmp(PyBytes_AS_STRING(probe), "Ab 1", 4) != 0)
+        raise_error(ErrorKind::Unsupported,
+                    "narrow_encoding '" + encoding + "' is not ASCII-compatible; use a single-byte "
+                    "or multi-byte ASCII superset such as utf-8, cp1252 or latin-1");
 }
 
 // Decode the bytes of a narrow (String/V_String) field with one fixed
@@ -234,7 +249,8 @@ static nb::object narrow_to_python_str(const FieldBase* field, int64_t record, c
                     "field '" + wstring_to_utf8(WString(field->GetFieldName().c_str()), false)
                         + "', record " + std::to_string(record) + ": bytes are not valid " + encoding
                         + where + ". If the text is single-byte, pass narrow_encoding=\"cp1252\" "
-                        "or \"latin-1\"");
+                        "(or \"latin-1\" if cp1252 rejects it). If values in the file mix "
+                        "encodings, no single codec reads them all");
     }
     return nb::steal<nb::object>(obj);
 }
