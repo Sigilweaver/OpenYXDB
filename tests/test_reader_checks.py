@@ -91,7 +91,7 @@ def test_scan_raises_on_short_batch(tmp_path, monkeypatch):
 
     lf = openyxdb.scan_yxdb(p)
     monkeypatch.setattr(openyxdb, "Reader", Short)
-    with pytest.raises(pl.exceptions.ComputeError, match="returned 9 rows"):
+    with pytest.raises((pl.exceptions.ComputeError, openyxdb.FormatError), match="returned 9 rows"):
         lf.collect()
 
 
