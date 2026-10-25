@@ -127,6 +127,11 @@ public:
 		const String::TChar* pNamePrefix = NULL,
 		bool bIgnoreLockIn = false);
 
+	// The field names exactly as written in a RecordInfo XML document, before
+	// any renaming that InitFromXml applies to make them unique or valid.
+	static RECORDLIB_EXPORT_CPP std::vector<String> FieldNamesInXml(
+		const MINIXML_NAMESPACE::MiniXmlParser::TagInfo& xmlTag);
+
 	E1ONLY_RECORDLIB_EXPORT_CPP SmartPointerRefObj<Record> CreateRecord() const;
 
 	RECORDLIB_EXPORT_CPP int GetFieldNum(StringNoCase strField, bool bThrowError = true) const;

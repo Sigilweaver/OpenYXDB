@@ -370,6 +370,7 @@ void Open_AlteryxYXDB::ValidateHeader()
 	m_pFile->Read(pRecordInfoXml, m_header.userHdr.nMetaInfoLen * sizeof(U16unit));
 	strRecordInfoXml.Unlock();
 
+	m_strFileRecordInfoXml = strRecordInfoXml;
 	m_recordInfo.InitFromXml(strRecordInfoXml);
 	if (m_recordInfo.NumFields() == 0)
 		throw Error(ErrorKind::Schema, AString("YXDB schema XML has no RecordInfo element or no Field elements"));

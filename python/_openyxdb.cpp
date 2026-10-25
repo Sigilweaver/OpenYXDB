@@ -485,6 +485,20 @@ public:
 
     const std::vector<FieldInfo>& schema() const { return m_schema; }
 
+    // Field names exactly as stored in the file. For E1 files the library
+    // renames duplicate or unusable names when it loads the schema; comparing
+    // with schema() shows which fields were renamed.
+    std::vector<std::string> file_field_names() const {
+        std::vector<std::string> out;
+        if (m_isE2) {
+            for (const auto& f : m_schema) out.push_back(f.name);
+            return out;
+        }
+        for (const auto& n : RecordInfo::FieldNamesInXml(m_db.GetFileRecordInfoXml()))
+            out.push_back(wstring_to_utf8(WString(n.c_str()), false));
+        return out;
+    }
+
     // Read all records as a list of dicts (column-name -> value)
     nb::list read_records() {
         require_unique_names();
@@ -1229,6 +1243,10 @@ NB_MODULE(_openyxdb, m) {
 
     nb::class_<FieldInfo>(m, "FieldInfo")
         .def(nb::init<>())
+        .def("__init__", [](FieldInfo* self, const std::string& name, const std::string& type, int size, int scale) {
+                 new (self) FieldInfo{name, type, size, scale};
+             },
+             nb::kw_only(), "name"_a, "type"_a, "size"_a = 0, "scale"_a = 0)
         .def_rw("name", &FieldInfo::name)
         .def_rw("type", &FieldInfo::type)
         .def_rw("size", &FieldInfo::size)
@@ -1250,6 +1268,7 @@ NB_MODULE(_openyxdb, m) {
                      "Detected file format: 'E1' (original) or 'E2' (AMP engine).")
         .def_prop_ro("num_records", &YXDBReader::num_records)
         .def_prop_ro("schema", &YXDBReader::schema)
+        .def_prop_ro("file_field_names", &YXDBReader::file_field_names)
         .def("read_records", &YXDBReader::read_records,
              "Read all records as a list of dicts")
         .def("read_columns", &YXDBReader::read_columns,

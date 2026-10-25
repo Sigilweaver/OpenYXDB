@@ -88,8 +88,15 @@ def test_unknown_encoding_raises(p):
 
 
 def test_high_level_functions_take_the_encoding(p):
-    openyxdb.write_yxdb(p, {"s": ["€"]}, schema=[fi("s", "V_String", 5)], narrow_encoding="cp1252")
-    assert openyxdb.read_yxdb(p, narrow_encoding="cp1252") == {"s": ["€"]}
+    euro = "\u20ac"
+    openyxdb.write_yxdb(
+        p,
+        {"s": [euro]},
+        schema=[fi("s", "V_String", 5)],
+        options=openyxdb.WriteOptions(narrow_encoding="cp1252"),
+    )
+    opts = openyxdb.ReadOptions(narrow_encoding="cp1252")
+    assert openyxdb.read_yxdb(p, options=opts) == {"s": [euro]}
     with pytest.raises(openyxdb.ConversionError):
         openyxdb.read_yxdb(p)
 
