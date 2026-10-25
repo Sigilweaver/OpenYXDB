@@ -209,25 +209,39 @@ static void check_codec(const std::string& encoding) {
 }
 
 // Decode the bytes of a narrow (String/V_String) field with one fixed
-// encoding for the whole file. Alteryx stores these fields in a single-byte
-// code page, so the default is latin-1, which maps every byte. A stricter
-// encoding such as 'utf-8' raises on bytes it cannot decode.
-static nb::object narrow_to_python_str(const FieldBase* field, const char* data, size_t len,
-                                       const std::string& encoding) {
+// encoding for the whole file. The default is strict UTF-8: bytes that are not
+// valid UTF-8 raise instead of being guessed at. Single-byte text needs
+// narrow_encoding="cp1252" or "latin-1".
+static nb::object narrow_to_python_str(const FieldBase* field, int64_t record, const char* data,
+                                       size_t len, const std::string& encoding) {
     PyObject* obj = PyUnicode_Decode(data, static_cast<Py_ssize_t>(len), encoding.c_str(), "strict");
     if (!obj) {
-        PyErr_Clear();
+        PyObject *t = nullptr, *v = nullptr, *tb = nullptr;
+        PyErr_Fetch(&t, &v, &tb);
+        PyErr_NormalizeException(&t, &v, &tb);
+        std::string where;
+        if (v && PyErr_GivenExceptionMatches(t, PyExc_UnicodeDecodeError)) {
+            Py_ssize_t start = 0;
+            if (PyUnicodeDecodeError_GetStart(v, &start) == 0)
+                where = " at byte offset " + std::to_string(start) + " of the value";
+            else
+                PyErr_Clear();
+        }
+        Py_XDECREF(t);
+        Py_XDECREF(v);
+        Py_XDECREF(tb);
         raise_error(ErrorKind::Conversion,
                     "field '" + wstring_to_utf8(WString(field->GetFieldName().c_str()), false)
-                        + "' holds bytes that are not valid " + encoding
-                        + "; pass a different narrow_encoding");
+                        + "', record " + std::to_string(record) + ": bytes are not valid " + encoding
+                        + where + ". If the text is single-byte, pass narrow_encoding=\"cp1252\" "
+                        "or \"latin-1\"");
     }
     return nb::steal<nb::object>(obj);
 }
 
 // Extract a field value as a Python object
 static nb::object field_to_python(const FieldBase* field, const RecordData* rec,
-                                  const std::string& narrow_encoding) {
+                                  const std::string& narrow_encoding, int64_t record) {
     if (field->GetNull(rec))
         return nb::none();
 
@@ -261,7 +275,7 @@ static nb::object field_to_python(const FieldBase* field, const RecordData* rec,
         case E_FT_String:
         case E_FT_V_String: {
             auto val = field->GetAsAString(rec);
-            return narrow_to_python_str(field, val.value.pValue, val.value.nLength, narrow_encoding);
+            return narrow_to_python_str(field, record, val.value.pValue, val.value.nLength, narrow_encoding);
         }
         case E_FT_WString:
         case E_FT_V_WString: {
@@ -370,7 +384,7 @@ class YXDBReader {
 
 public:
     YXDBReader(const std::string& path, bool allow_unverified_types = false,
-               const std::string& narrow_encoding = "latin-1")
+               const std::string& narrow_encoding = "utf-8")
         : m_narrowEncoding(narrow_encoding) {
         check_codec(narrow_encoding);
         m_isE2 = is_e2_file(path);
@@ -459,7 +473,7 @@ public:
             if (!rec) break;
             nb::dict row;
             for (size_t f = 0; f < m_fields.size(); ++f) {
-                row[nb::cast(m_schema[f].name)] = field_to_python(m_fields[f], rec, m_narrowEncoding);
+                row[nb::cast(m_schema[f].name)] = field_to_python(m_fields[f], rec, m_narrowEncoding, i);
             }
             rows.append(row);
         }
@@ -494,7 +508,7 @@ public:
             const RecordData* rec = m_db.ReadRecord();
             if (!rec) break;
             for (size_t f = 0; f < nFields; ++f) {
-                columns[f].append(field_to_python(m_fields[f], rec, m_narrowEncoding));
+                columns[f].append(field_to_python(m_fields[f], rec, m_narrowEncoding, i));
             }
         }
 
@@ -581,7 +595,7 @@ public:
                 if (!rec) break;
                 for (size_t p = 0; p < nProj; ++p) {
                     columns_out[p].append(
-                        field_to_python(m_fields[proj_indices[p]], rec, m_narrowEncoding));
+                        field_to_python(m_fields[proj_indices[p]], rec, m_narrowEncoding, offset + i));
                 }
             }
         }
@@ -715,7 +729,7 @@ class YXDBWriter {
 
 public:
     YXDBWriter(const std::string& path, const std::vector<FieldInfo>& schema,
-               const std::string& narrow_encoding = "latin-1")
+               const std::string& narrow_encoding = "utf-8")
         : m_finalPath(path), m_tmpPath(partial_name(path)), m_narrowEncoding(narrow_encoding) {
         check_codec(narrow_encoding);
         if (schema.empty())
@@ -1151,9 +1165,9 @@ NB_MODULE(_openyxdb, m) {
     nb::class_<YXDBReader>(m, "Reader")
         .def(nb::init<const std::string&, bool, const std::string&>(),
              "path"_a, "allow_unverified_types"_a = false,
-             "narrow_encoding"_a = "latin-1",
+             "narrow_encoding"_a = "utf-8",
              "narrow_encoding: codec used for every String and V_String value "
-             "(E1 files). The default, latin-1, decodes any byte.")
+             "(E1 files). The default, utf-8, is strict.")
         .def("close", &YXDBReader::close)
         .def_prop_ro("format", &YXDBReader::format,
                      "Detected file format: 'E1' (original) or 'E2' (AMP engine).")
@@ -1173,7 +1187,7 @@ NB_MODULE(_openyxdb, m) {
 
     nb::class_<YXDBWriter>(m, "Writer")
         .def(nb::init<const std::string&, const std::vector<FieldInfo>&, const std::string&>(),
-             "path"_a, "schema"_a, "narrow_encoding"_a = "latin-1",
+             "path"_a, "schema"_a, "narrow_encoding"_a = "utf-8",
              "narrow_encoding: codec used for every String and V_String value. "
              "Characters it cannot encode raise ConversionError.")
         .def("close", &YXDBWriter::close)

@@ -18,56 +18,66 @@ def p(tmp_path):
 
 
 @pytest.mark.parametrize("type_", ["String", "V_String"])
-def test_default_is_latin1_both_ways(p, type_):
-    with Writer(str(p), [fi("s", type_, 4)]) as w:
-        w.write_record({"s": "café"})  # 4 characters, 4 bytes in latin-1
+def test_default_is_utf8_both_ways(p, type_):
+    with Writer(str(p), [fi("s", type_, 5)]) as w:
+        w.write_record({"s": "café"})  # 5 bytes in UTF-8
     with Reader(str(p)) as r:
         assert [dict(x) for x in r.read_records()] == [{"s": "café"}]
 
 
-def test_values_are_decoded_the_same_way_in_every_row(p):
-    # Each of these byte strings is also valid UTF-8 in some rows; the decode
-    # must not depend on the row.
-    values = ["Ã©", "é", "plain"]
-    with Writer(str(p), [fi("s", "V_String", 10)]) as w:
-        for v in values:
+def test_size_counts_encoded_bytes(p):
+    with pytest.raises(openyxdb.ConversionError, match="truncated"):
+        with Writer(str(p), [fi("s", "V_String", 4)]) as w:
+            w.write_record({"s": "café"})  # 5 bytes into 4
+
+
+def test_single_byte_text_raises_with_location_and_advice(p):
+    with Writer(str(p), [fi("s", "V_String", 10)], narrow_encoding="latin-1") as w:
+        w.write_record({"s": "ok"})
+        w.write_record({"s": "café"})
+    with Reader(str(p)) as r:
+        with pytest.raises(openyxdb.ConversionError) as e:
+            r.read_records()
+    msg = str(e.value)
+    assert "field 's'" in msg
+    assert "record 1" in msg
+    assert "byte offset 3" in msg
+    assert 'narrow_encoding="cp1252"' in msg
+
+
+def test_error_reports_the_record_in_windowed_reads(p):
+    with Writer(str(p), [fi("s", "V_String", 10)], narrow_encoding="latin-1") as w:
+        for v in ["a", "b", "c", "dé"]:
             w.write_record({"s": v})
     with Reader(str(p)) as r:
+        with pytest.raises(openyxdb.ConversionError, match="record 3"):
+            r.read_columns_subset(["s"], 2, 2)
+
+
+def test_latin1_and_cp1252_read_single_byte_text(p):
+    with Writer(str(p), [fi("s", "V_String", 10)], narrow_encoding="cp1252") as w:
+        w.write_record({"s": "€"})
+    with Reader(str(p), narrow_encoding="cp1252") as r:
+        assert dict(r.read_records()[0])["s"] == "€"
+    with Reader(str(p), narrow_encoding="latin-1") as r:
+        assert dict(r.read_records()[0])["s"] == "\x80"
+
+
+def test_values_are_decoded_the_same_way_in_every_row(p):
+    # Valid UTF-8 as latin-1 text must not be reinterpreted row by row.
+    values = ["Ã©", "é", "plain"]
+    with Writer(str(p), [fi("s", "V_String", 10)], narrow_encoding="latin-1") as w:
+        for v in values:
+            w.write_record({"s": v})
+    with Reader(str(p), narrow_encoding="latin-1") as r:
         assert [dict(x)["s"] for x in r.read_records()] == values
 
 
 def test_unencodable_character_raises(p):
     with pytest.raises(openyxdb.ConversionError, match="cannot be encoded as latin-1"):
-        with Writer(str(p), [fi("s", "V_String", 10)]) as w:
+        with Writer(str(p), [fi("s", "V_String", 10)], narrow_encoding="latin-1") as w:
             w.write_record({"s": "€"})
     assert not p.exists()
-
-
-def test_cp1252_round_trips_euro(p):
-    with Writer(str(p), [fi("s", "V_String", 10)], narrow_encoding="cp1252") as w:
-        w.write_record({"s": "€"})
-    with Reader(str(p), narrow_encoding="cp1252") as r:
-        assert dict(r.read_records()[0])["s"] == "€"
-    with Reader(str(p)) as r:
-        assert dict(r.read_records()[0])["s"] == "\x80"
-
-
-def test_utf8_is_strict_on_read(p):
-    with Writer(str(p), [fi("s", "V_String", 10)]) as w:
-        w.write_record({"s": "café"})
-    with pytest.raises(openyxdb.ConversionError, match="not valid utf-8"):
-        with Reader(str(p), narrow_encoding="utf-8") as r:
-            r.read_records()
-
-
-def test_utf8_round_trip_counts_bytes_for_size(p):
-    with Writer(str(p), [fi("s", "V_String", 3)], narrow_encoding="utf-8") as w:
-        w.write_record({"s": "éa"})  # 3 bytes
-    with Reader(str(p), narrow_encoding="utf-8") as r:
-        assert dict(r.read_records()[0])["s"] == "éa"
-    with pytest.raises(openyxdb.ConversionError, match="truncated"):
-        with Writer(str(p), [fi("s", "V_String", 2)], narrow_encoding="utf-8") as w:
-            w.write_record({"s": "éa"})  # 3 bytes into 2
 
 
 def test_unknown_encoding_raises(p):
@@ -80,3 +90,5 @@ def test_unknown_encoding_raises(p):
 def test_high_level_functions_take_the_encoding(p):
     openyxdb.write_yxdb(p, {"s": ["€"]}, schema=[fi("s", "V_String", 5)], narrow_encoding="cp1252")
     assert openyxdb.read_yxdb(p, narrow_encoding="cp1252") == {"s": ["€"]}
+    with pytest.raises(openyxdb.ConversionError):
+        openyxdb.read_yxdb(p)

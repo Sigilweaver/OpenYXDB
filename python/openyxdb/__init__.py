@@ -166,7 +166,7 @@ def _arrow_type_to_yxdb(name: str, dtype) -> FieldInfo:
 
 
 def read_yxdb(
-    path: str | os.PathLike, *, narrow_encoding: str = "latin-1"
+    path: str | os.PathLike, *, narrow_encoding: str = "utf-8"
 ) -> dict[str, list[Any]]:
     """Read a YXDB file and return columnar data as a dict of lists.
 
@@ -182,7 +182,7 @@ def write_yxdb(
     columns: dict[str, list[Any]],
     schema: list[FieldInfo] | None = None,
     *,
-    narrow_encoding: str = "latin-1",
+    narrow_encoding: str = "utf-8",
 ) -> None:
     """Write columnar data to a YXDB file.
 
@@ -281,7 +281,7 @@ def _column_to_arrow(fi: FieldInfo, col_data: list, pa):
     return pa.array(col_data, type=arrow_type)
 
 
-def to_pyarrow(path: str | os.PathLike, *, narrow_encoding: str = "latin-1"):
+def to_pyarrow(path: str | os.PathLike, *, narrow_encoding: str = "utf-8"):
     """Read a YXDB file and return a PyArrow Table.
 
     The whole file is decoded to Python objects up front, so peak memory
@@ -394,7 +394,7 @@ def from_pyarrow(
     path: str | os.PathLike,
     chunk_size: int | None = None,
     *,
-    narrow_encoding: str = "latin-1",
+    narrow_encoding: str = "utf-8",
 ) -> None:
     """Write a PyArrow Table to a YXDB file.
 
@@ -418,7 +418,7 @@ def from_pyarrow(
 # --------------------------------------------------------------------------- #
 
 
-def to_pandas(path: str | os.PathLike, *, narrow_encoding: str = "latin-1"):
+def to_pandas(path: str | os.PathLike, *, narrow_encoding: str = "utf-8"):
     """Read a YXDB file and return a Pandas DataFrame."""
     import pandas as pd
 
@@ -427,7 +427,7 @@ def to_pandas(path: str | os.PathLike, *, narrow_encoding: str = "latin-1"):
 
 
 def from_pandas(
-    df, path: str | os.PathLike, chunk_size: int | None = None, *, narrow_encoding: str = "latin-1"
+    df, path: str | os.PathLike, chunk_size: int | None = None, *, narrow_encoding: str = "utf-8"
 ) -> None:
     """Write a Pandas DataFrame to a YXDB file.
 
@@ -508,7 +508,7 @@ def _yxdb_columns_to_polars(
     return pl.DataFrame(series)
 
 
-def to_polars(path: str | os.PathLike, *, narrow_encoding: str = "latin-1"):
+def to_polars(path: str | os.PathLike, *, narrow_encoding: str = "utf-8"):
     """Read a YXDB file and return a Polars DataFrame."""
     import polars as pl
 
@@ -516,7 +516,7 @@ def to_polars(path: str | os.PathLike, *, narrow_encoding: str = "latin-1"):
     return pl.from_arrow(table)
 
 
-def scan_yxdb(path: str | os.PathLike, *, narrow_encoding: str = "latin-1") -> "pl.LazyFrame":
+def scan_yxdb(path: str | os.PathLike, *, narrow_encoding: str = "utf-8") -> "pl.LazyFrame":
     """Scan a YXDB file as a Polars LazyFrame (IO plugin).
 
     Supports:
@@ -604,7 +604,7 @@ def scan_yxdb(path: str | os.PathLike, *, narrow_encoding: str = "latin-1") -> "
 
 
 def from_polars(
-    df, path: str | os.PathLike, chunk_size: int | None = None, *, narrow_encoding: str = "latin-1"
+    df, path: str | os.PathLike, chunk_size: int | None = None, *, narrow_encoding: str = "utf-8"
 ) -> None:
     """Write a Polars DataFrame to a YXDB file.
 
@@ -621,7 +621,7 @@ def sink_yxdb(
     *,
     chunk_size: int = DEFAULT_WRITE_CHUNK_SIZE,
     engine: str = "streaming",
-    narrow_encoding: str = "latin-1",
+    narrow_encoding: str = "utf-8",
 ) -> None:
     """Execute a Polars LazyFrame and stream the result to a YXDB file.
 
@@ -673,7 +673,7 @@ def to_duckdb(
     con=None,
     table_name: str | None = None,
     *,
-    narrow_encoding: str = "latin-1",
+    narrow_encoding: str = "utf-8",
 ):
     """Load a YXDB file into DuckDB and return a DuckDB relation.
 
@@ -706,7 +706,7 @@ def from_duckdb(
     con=None,
     chunk_size: int | None = None,
     *,
-    narrow_encoding: str = "latin-1",
+    narrow_encoding: str = "utf-8",
 ) -> None:
     """Write a DuckDB query or relation to a YXDB file.
 
@@ -740,7 +740,7 @@ def from_duckdb(
 
 
 def register_duckdb(
-    con, name: str, path: str | os.PathLike, *, narrow_encoding: str = "latin-1"
+    con, name: str, path: str | os.PathLike, *, narrow_encoding: str = "utf-8"
 ) -> None:
     """Register a YXDB file as a named view on a DuckDB connection.
 
