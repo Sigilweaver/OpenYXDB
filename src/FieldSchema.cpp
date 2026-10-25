@@ -95,14 +95,14 @@ FieldSchema FieldSchema::FromXML(
 	String strType = MINIXML_NAMESPACE::MiniXmlParser::GetAttribute(tagField, _U("type"), true);
 	E_FieldType ft = GetFieldTypeFromName(strType);
 	if (ft == E_FT_Unknown)
-		throw Error(XMSG("Unknown field type: @1", strType));
+		throw Error(ErrorKind::Schema, XMSG("Unknown field type: @1", strType));
 	String strName = MINIXML_NAMESPACE::MiniXmlParser::GetAttribute(tagField, _U("name"), true);
 	if (pNamePrefix)
 		strName = pNamePrefix + strName;
 	String strSize = MINIXML_NAMESPACE::MiniXmlParser::GetAttribute(tagField, _U("size"), false);
 	int nSize = strSize.ConvertToInt();
 	if (nSize <= 0 && IsString(ft))
-		throw Error(XMSG("Field: \"@1\" is 0 length.", strName));
+		throw Error(ErrorKind::Schema, XMSG("Field: \"@1\" is 0 length.", strName));
 	String strSource(MINIXML_NAMESPACE::MiniXmlParser::GetAttribute(tagField, _U("source"), false));
 	String strDescription(MINIXML_NAMESPACE::MiniXmlParser::GetAttribute(tagField, _U("description"), false));
 

@@ -4,6 +4,8 @@
 #include "Open_AlteryxYXDB.h"
 
 #include <cerrno>
+#include <cstring>
+#include <string>
 
 #include <fcntl.h>  // for open, error codes
 #include <sys/stat.h>
@@ -143,18 +145,27 @@ void File_Large::LSeek(int64_t nPos)
 
 unsigned File_Large::Read(void* _pBuffer, unsigned nNumBytesToRead)
 {
-	unsigned ret = 0;
+	int64_t nStartPos = Tell();
 
 #ifdef __GNUG__
-	ret = read(m_iFileDescriptor, _pBuffer, nNumBytesToRead);
+	ssize_t ret = read(m_iFileDescriptor, _pBuffer, nNumBytesToRead);
 #else
-	ret = _read(m_iFileDescriptor, _pBuffer, nNumBytesToRead);
+	int ret = _read(m_iFileDescriptor, _pBuffer, nNumBytesToRead);
 #endif
 
-	if (ret != nNumBytesToRead)
-		ThrowOsError(U16("Error in Read: Unexpected number of bytes to read"));
+	if (ret < 0)
+		ThrowOsError(U16("Error in Read: "));
 
-	return ret;
+	if (static_cast<unsigned>(ret) != nNumBytesToRead)
+	{
+		// The file ended before the content it declares: a malformed file, not
+		// an OS error.
+		std::string msg = "Error in Read: expected " + std::to_string(nNumBytesToRead) + " bytes at offset "
+			+ std::to_string(nStartPos) + " but got " + std::to_string(ret) + " (unexpected end of file)";
+		throw Error(ErrorKind::Format, AString(msg.c_str()));
+	}
+
+	return static_cast<unsigned>(ret);
 }
 
 unsigned File_Large::Write(const void* _pBuffer, unsigned nNumBytesToWrite)
@@ -263,12 +274,51 @@ Open_AlteryxYXDB::~Open_AlteryxYXDB()
 	m_nCurrentRecord++;
 }
 
+[[noreturn]] static void ThrowFormatError(const std::string& msg)
+{
+	throw Error(ErrorKind::Format, AString(msg.c_str()));
+}
+
+void Open_AlteryxYXDB::ValidateHeader()
+{
+	static const char kMagic[] = "Alteryx Database File";
+	const HeaderData& u = m_header.userHdr;
+
+	if (strncmp(m_header.fileDesc, kMagic, sizeof(kMagic) - 1) != 0)
+		ThrowFormatError(std::string("Not a YXDB file: header does not start with \"Alteryx Database File\""));
+
+	// Only file versions 4 and 5 are known to exist; 2 and 3 have no known
+	// writer and their record index layout is not handled here.
+	unsigned nVersion = static_cast<unsigned>(m_header.fileID) & 0xff;
+	if (nVersion != 4 && nVersion != 5)
+		ThrowFormatError(std::string("Unsupported YXDB file version ") + std::to_string(nVersion) + ", expected 4 or 5");
+
+	if (u.nCompressionVersion != 0 && u.nCompressionVersion != 1)
+		ThrowFormatError(
+			std::string("Unsupported YXDB compression version ") + std::to_string(u.nCompressionVersion)
+			+ ", expected 0 or 1");
+
+	if (u.nNumRecords < 0)
+		ThrowFormatError(std::string("Invalid YXDB record count ") + std::to_string(u.nNumRecords));
+
+	// The header is rewritten at Close(), so a file whose writer never closed
+	// it still has a zeroed record count and index position.
+	int64_t nDataStart = int64_t(sizeof(m_header)) + int64_t(u.nMetaInfoLen) * int64_t(sizeof(U16unit));
+	if (u.nRecordBlockIndexPos < nDataStart)
+		ThrowFormatError(
+			std::string("YXDB file was not finalized: record block index position ")
+			+ std::to_string(u.nRecordBlockIndexPos) + " is before the record data start "
+			+ std::to_string(nDataStart));
+}
+
 /*virtual*/ void Open_AlteryxYXDB::Open(WString strFile)
 {
 	m_pFile.reset(new File_Large());
 	m_pFile->OpenForRead(strFile);
 
 	m_header.Read(*m_pFile);
+
+	ValidateHeader();
 
 	m_bIndexStartsBlock = (m_header.fileID & 0xff) == 3;
 	if (m_header.userHdr.nCompressionVersion == 1)
@@ -280,6 +330,8 @@ Open_AlteryxYXDB::~Open_AlteryxYXDB()
 	strRecordInfoXml.Unlock();
 
 	m_recordInfo.InitFromXml(strRecordInfoXml);
+	if (m_recordInfo.NumFields() == 0)
+		throw Error(ErrorKind::Schema, AString("YXDB schema XML has no RecordInfo element or no Field elements"));
 	m_pRecord = m_recordInfo.CreateRecord();
 
 	// make sure we are at the first record in the file
