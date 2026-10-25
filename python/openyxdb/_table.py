@@ -35,9 +35,18 @@ class Table:
         fields: Sequence[FieldInfo],
         columns: Sequence[list[Any]],
         warnings: Sequence[Diagnostic] = (),
+        *,
+        num_rows: int | None = None,
     ) -> None:
         if len(fields) != len(columns):
             raise ValueError("fields and columns must have the same length")
+        lengths = {len(c) for c in columns}
+        if len(lengths) > 1:
+            raise ValueError("columns must all have the same length")
+        derived = lengths.pop() if lengths else 0
+        if num_rows is not None and columns and num_rows != derived:
+            raise ValueError("num_rows does not match the columns")
+        self._num_rows = derived if num_rows is None else num_rows
         self._columns = [Column(f, c) for f, c in zip(fields, columns)]
         self.warnings: list[Diagnostic] = list(warnings)
 
@@ -57,7 +66,7 @@ class Table:
 
     @property
     def num_rows(self) -> int:
-        return len(self._columns[0].values) if self._columns else 0
+        return self._num_rows
 
     def __len__(self) -> int:
         return self.num_rows

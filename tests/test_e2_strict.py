@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime
 import struct
 from pathlib import Path
 
@@ -172,7 +173,7 @@ def test_whole_second_time_reads(tmp_path: Path) -> None:
         tmp_path / "ok.yxdb", [("t", "Time")], b"\x0f" + centi.to_bytes(3, "little")
     )
     with Reader(str(path)) as reader:
-        assert reader.read_columns() == {"t": ["01:01:01"]}
+        assert reader.read_columns() == {"t": [datetime.time(1, 1, 1)]}
 
 
 def test_datetime_with_fraction_raises(tmp_path: Path) -> None:

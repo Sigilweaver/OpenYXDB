@@ -255,6 +255,89 @@ static nb::object narrow_to_python_str(const FieldBase* field, int64_t record, c
     return nb::steal<nb::object>(obj);
 }
 
+static std::string field_label(const FieldBase* field) {
+    return wstring_to_utf8(WString(field->GetFieldName().c_str()), false);
+}
+
+// A FixedDecimal is stored as text. The whole text must be a plain decimal
+// number; the library's own parser stops at the first bad character and
+// returns the digits before it. The result is the correctly rounded double of
+// the text.
+static nb::object parse_fixed_decimal(const char* t, size_t n, const std::string& field,
+                                      int64_t record) {
+    if (n == 0) return nb::none();
+    size_t i = 0;
+    if (t[i] == '-' || t[i] == '+') ++i;
+    size_t digits = 0;
+    while (i < n && t[i] >= '0' && t[i] <= '9') { ++i; ++digits; }
+    if (i < n && t[i] == '.') {
+        ++i;
+        while (i < n && t[i] >= '0' && t[i] <= '9') { ++i; ++digits; }
+    }
+    if (i != n || digits == 0)
+        raise_error(ErrorKind::Conversion,
+                    "field '" + field + "', record " + std::to_string(record) + ": FixedDecimal text '"
+                        + std::string(t, n) + "' is not a number");
+    return nb::cast(std::strtod(std::string(t, n).c_str(), nullptr));
+}
+
+static bool digits_to_int(const char* t, size_t n, int& out) {
+    int v = 0;
+    for (size_t i = 0; i < n; ++i) {
+        if (t[i] < '0' || t[i] > '9') return false;
+        v = v * 10 + (t[i] - '0');
+    }
+    out = v;
+    return true;
+}
+
+// Date/Time/DateTime values are stored as ISO text ("YYYY-MM-DD",
+// "HH:MM:SS", "YYYY-MM-DD HH:MM:SS"). They are returned as datetime.date,
+// datetime.time and datetime.datetime; text that is not a valid value of its
+// type raises instead of being passed on as a string.
+enum class Temporal { Date, Time, DateTime };
+
+static nb::object parse_temporal(Temporal kind, const char* t, size_t n, const std::string& field,
+                                 int64_t record) {
+    if (n == 0) return nb::none();
+    auto bad = [&]() {
+        const char* what = kind == Temporal::Date ? "Date" : kind == Temporal::Time ? "Time" : "DateTime";
+        raise_error(ErrorKind::Format,
+                    "field '" + field + "', record " + std::to_string(record) + ": '"
+                        + std::string(t, n) + "' is not a valid " + what);
+    };
+    int y = 0, mo = 0, d = 0, h = 0, mi = 0, se = 0;
+    auto date_part = [&](const char* p) {
+        return p[4] == '-' && p[7] == '-' && digits_to_int(p, 4, y) && digits_to_int(p + 5, 2, mo)
+               && digits_to_int(p + 8, 2, d);
+    };
+    auto time_part = [&](const char* p) {
+        return p[2] == ':' && p[5] == ':' && digits_to_int(p, 2, h) && digits_to_int(p + 3, 2, mi)
+               && digits_to_int(p + 6, 2, se);
+    };
+    nb::object dt = nb::module_::import_("datetime");
+    try {
+        switch (kind) {
+            case Temporal::Date:
+                if (n != 10 || !date_part(t)) bad();
+                return dt.attr("date")(y, mo, d);
+            case Temporal::Time:
+                if (n != 8 || !time_part(t)) bad();
+                return dt.attr("time")(h, mi, se);
+            case Temporal::DateTime:
+                if (n == 10) {
+                    if (!date_part(t)) bad();
+                    return dt.attr("datetime")(y, mo, d);
+                }
+                if (n != 19 || t[10] != ' ' || !date_part(t) || !time_part(t + 11)) bad();
+                return dt.attr("datetime")(y, mo, d, h, mi, se);
+        }
+    } catch (nb::python_error&) {
+        bad();  // for example month 13 or February 30
+    }
+    return nb::none();
+}
+
 // Extract a field value as a Python object
 static nb::object field_to_python(const FieldBase* field, const RecordData* rec,
                                   const std::string& narrow_encoding, int64_t record) {
@@ -282,33 +365,16 @@ static nb::object field_to_python(const FieldBase* field, const RecordData* rec,
             return nb::cast(val.value);
         }
         case E_FT_FixedDecimal: {
-            // Stored as text. The whole text must be a plain decimal number;
-            // the library's lenient parser would stop at the first bad
-            // character and return the digits before it.
             auto val = field->GetAsAString(rec);
-            if (val.value.nLength == 0) return nb::none();
-            const char* t = val.value.pValue;
-            size_t n = val.value.nLength;
-            size_t i = 0;
-            if (t[i] == '-' || t[i] == '+') ++i;
-            size_t digits = 0;
-            while (i < n && t[i] >= '0' && t[i] <= '9') { ++i; ++digits; }
-            if (i < n && t[i] == '.') {
-                ++i;
-                while (i < n && t[i] >= '0' && t[i] <= '9') { ++i; ++digits; }
-            }
-            if (i != n || digits == 0)
-                raise_error(ErrorKind::Conversion,
-                            "FixedDecimal field '"
-                                + wstring_to_utf8(WString(field->GetFieldName().c_str()), false)
-                                + "' holds '" + std::string(t, n) + "', which is not a number");
-            return nb::cast(std::strtod(std::string(t, n).c_str(), nullptr));
+            return parse_fixed_decimal(val.value.pValue, val.value.nLength, field_label(field), record);
         }
         case E_FT_Date:
         case E_FT_Time:
         case E_FT_DateTime: {
             auto val = field->GetAsAString(rec);
-            return nb::cast(std::string(val.value.pValue, val.value.nLength));
+            Temporal k = field->m_ft == E_FT_Date ? Temporal::Date
+                         : field->m_ft == E_FT_Time ? Temporal::Time : Temporal::DateTime;
+            return parse_temporal(k, val.value.pValue, val.value.nLength, field_label(field), record);
         }
         case E_FT_String:
         case E_FT_V_String: {
@@ -318,7 +384,14 @@ static nb::object field_to_python(const FieldBase* field, const RecordData* rec,
         case E_FT_WString:
         case E_FT_V_WString: {
             auto val = field->GetAsWString(rec);
-            return nb::cast(u16_to_utf8(val.value.pValue, val.value.nLength));
+            try {
+                return nb::cast(u16_to_utf8(val.value.pValue, val.value.nLength));
+            } catch (const SRC::Error& e) {
+                throw SRC::Error(e.GetKind(),
+                                 utf8_to_wstring("field '" + field_label(field) + "', record "
+                                                 + std::to_string(record) + ": ")
+                                     + e.GetErrorDescription());
+            }
         }
         case E_FT_Blob:
         case E_FT_SpatialObj: {
@@ -326,14 +399,15 @@ static nb::object field_to_python(const FieldBase* field, const RecordData* rec,
             return nb::bytes(reinterpret_cast<const char*>(val.value.pValue), val.value.nLength);
         }
         default:
-            return nb::none();
+            raise_error(ErrorKind::Unsupported, "unsupported field type in reader");
     }
 }
 
 // Helper: convert a single decoded E2 cell to a Python object, given the
 // declared field type so we can pick the right Python representation.
 static nb::object e2_cell_to_python(const Alteryx::OpenYXDB::e2::E2Cell& c,
-                                    Alteryx::OpenYXDB::e2::E2FieldType ft) {
+                                    Alteryx::OpenYXDB::e2::E2FieldType ft,
+                                    const std::string& field, int64_t record) {
     using K = Alteryx::OpenYXDB::e2::E2Cell::Kind;
     using FT = Alteryx::OpenYXDB::e2::E2FieldType;
     if (c.kind == K::Null) return nb::none();
@@ -357,11 +431,23 @@ static nb::object e2_cell_to_python(const Alteryx::OpenYXDB::e2::E2Cell& c,
         case FT::WString:
         case FT::V_String:
         case FT::V_WString:
-        case FT::Date:
-        case FT::Time:
-        case FT::DateTime:
-        case FT::FixedDecimal:
             if (c.kind == K::Text) return nb::cast(c.text);
+            break;
+        case FT::Date:
+            if (c.kind == K::Text)
+                return parse_temporal(Temporal::Date, c.text.data(), c.text.size(), field, record);
+            break;
+        case FT::Time:
+            if (c.kind == K::Text)
+                return parse_temporal(Temporal::Time, c.text.data(), c.text.size(), field, record);
+            break;
+        case FT::DateTime:
+            if (c.kind == K::Text)
+                return parse_temporal(Temporal::DateTime, c.text.data(), c.text.size(), field, record);
+            break;
+        case FT::FixedDecimal:
+            if (c.kind == K::Text)
+                return parse_fixed_decimal(c.text.data(), c.text.size(), field, record);
             break;
         case FT::Blob:
         case FT::SpatialObj:
@@ -438,8 +524,11 @@ public:
                 FieldInfo info;
                 info.name = f.name;
                 info.type = Alteryx::OpenYXDB::e2::E2FieldTypeName(f.type);
-                info.size = f.size;
-                info.scale = f.scale;
+                const bool dec = f.type == Alteryx::OpenYXDB::e2::E2FieldType::FixedDecimal;
+                const bool blob = f.type == Alteryx::OpenYXDB::e2::E2FieldType::Blob
+                                  || f.type == Alteryx::OpenYXDB::e2::E2FieldType::SpatialObj;
+                info.size = blob ? 0 : f.size;
+                info.scale = dec ? f.scale : 0;
                 m_schema.push_back(info);
             }
             return;
@@ -457,8 +546,11 @@ public:
             FieldInfo info;
             info.name = wstring_to_utf8(WString(f->GetFieldName().c_str()));
             info.type = field_type_name(f->m_ft);
-            info.size = f->m_nSize;
-            info.scale = f->m_nScale;
+            // Only FixedDecimal has a scale and only sized types have a size;
+            // the core uses -1 and INT_MAX for "not applicable".
+            const bool blob = f->m_ft == E_FT_Blob || f->m_ft == E_FT_SpatialObj;
+            info.size = blob ? 0 : static_cast<int>(f->m_nSize);
+            info.scale = f->m_ft == E_FT_FixedDecimal ? f->m_nScale : 0;
             m_schema.push_back(info);
         }
     }
@@ -478,7 +570,12 @@ public:
 
     std::string format() const { return m_isE2 ? "E2" : "E1"; }
 
+    void require_open() const {
+        if (!m_open) raise_error(ErrorKind::Generic, "I/O operation on closed Reader");
+    }
+
     int64_t num_records() {
+        require_open();
         if (m_isE2) return m_e2->NumRecords();
         return m_db.GetNumRecords();
     }
@@ -501,6 +598,7 @@ public:
 
     // Read all records as a list of dicts (column-name -> value)
     nb::list read_records() {
+        require_open();
         require_unique_names();
         nb::list rows;
         if (m_isE2) {
@@ -513,7 +611,7 @@ public:
                 nb::dict row;
                 for (size_t f = 0; f < meta.size(); ++f) {
                     row[nb::cast(meta[f].name)] =
-                        e2_cell_to_python(cols[f][r], meta[f].type);
+                        e2_cell_to_python(cols[f][r], meta[f].type, meta[f].name, static_cast<int64_t>(r));
                 }
                 rows.append(row);
             }
@@ -539,6 +637,7 @@ public:
 
     // Read all records in columnar format: dict of column-name -> list of values
     nb::dict read_columns() {
+        require_open();
         require_unique_names();
         if (m_isE2) {
             std::vector<std::vector<Alteryx::OpenYXDB::e2::E2Cell>> cols;
@@ -547,8 +646,9 @@ public:
             nb::dict result;
             for (size_t f = 0; f < meta.size(); ++f) {
                 nb::list lst;
+                int64_t rec_no = 0;
                 for (auto& c : cols[f])
-                    lst.append(e2_cell_to_python(c, meta[f].type));
+                    lst.append(e2_cell_to_python(c, meta[f].type, meta[f].name, rec_no++));
                 result[nb::cast(meta[f].name)] = lst;
             }
             return result;
@@ -622,6 +722,7 @@ public:
             }
         }
 
+        require_open();
         require_unique_names(columns.has_value() ? &proj_indices : nullptr);
 
         if (m_isE2) {
@@ -632,8 +733,10 @@ public:
             nb::dict result;
             for (size_t p = 0; p < proj_indices.size(); ++p) {
                 nb::list lst;
+                int64_t rec_no = off;
                 for (auto& c : cols[p])
-                    lst.append(e2_cell_to_python(c, meta[proj_indices[p]].type));
+                    lst.append(e2_cell_to_python(c, meta[proj_indices[p]].type,
+                                                 meta[proj_indices[p]].name, rec_no++));
                 result[nb::cast(proj_names[p])] = lst;
             }
             return result;
@@ -1110,7 +1213,10 @@ private:
             case E_FT_Date:
             case E_FT_Time:
             case E_FT_DateTime: {
-                std::string s = nb::cast<std::string>(val);
+                // ISO text, or a datetime.date / time / datetime.
+                std::string s = PyUnicode_Check(val.ptr())
+                                    ? nb::cast<std::string>(val)
+                                    : temporal_to_text(field->m_ft, val);
                 field->SetFromString(rec, s.c_str(), s.size());
                 break;
             }
@@ -1135,6 +1241,41 @@ private:
             default:
                 raise_error(ErrorKind::Unsupported, "unsupported field type in writer");
         }
+    }
+
+    // The text form of a datetime.date / time / datetime. YXDB stores whole
+    // seconds in local time, so values with a sub-second part or a time zone
+    // are refused instead of being rounded or converted.
+    static std::string temporal_to_text(E_FieldType ft, nb::handle val) {
+        nb::module_ dt = nb::module_::import_("datetime");
+        auto is_a = [&](const char* cls) {
+            return PyObject_IsInstance(val.ptr(), dt.attr(cls).ptr()) == 1;
+        };
+        const bool is_datetime = is_a("datetime");
+        const char* want = ft == E_FT_Date ? "datetime.date" : ft == E_FT_Time ? "datetime.time"
+                                                                              : "datetime.datetime";
+        bool ok = ft == E_FT_Date ? (is_a("date") && !is_datetime)
+                  : ft == E_FT_Time ? is_a("time")
+                                    : is_datetime;
+        if (!ok) throw nb::type_error(want);
+        if (ft != E_FT_Date) {
+            if (!nb::borrow(val.attr("tzinfo")).is_none())
+                raise_error(ErrorKind::Conversion,
+                            "timezone-aware value " + nb::cast<std::string>(nb::repr(val))
+                                + " cannot be stored; YXDB date/times have no time zone. Convert to naive "
+                                  "local or UTC time first");
+            const bool sub_second =
+                nb::cast<int>(val.attr("microsecond")) != 0
+                || (nb::hasattr(val, "nanosecond") && nb::cast<int>(val.attr("nanosecond")) != 0);
+            if (sub_second)
+                raise_error(ErrorKind::Conversion,
+                            "value " + nb::cast<std::string>(nb::repr(val))
+                                + " has a sub-second part, which YXDB Time and DateTime fields cannot "
+                                  "store. Truncate or round it first");
+        }
+        if (ft == E_FT_DateTime)
+            return nb::cast<std::string>(val.attr("strftime")("%Y-%m-%d %H:%M:%S"));
+        return nb::cast<std::string>(val.attr("isoformat")());
     }
 
     // int -> double only when the integer is exactly representable.

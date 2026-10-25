@@ -8,7 +8,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from openyxdb import _openyxdb as _core
-from openyxdb._openyxdb import FieldInfo, FormatError, SchemaError
+from openyxdb._openyxdb import FieldInfo, FormatError, OpenYXDBError, SchemaError
 from openyxdb._table import Table
 from openyxdb._types import (
     Diagnostic,
@@ -22,7 +22,8 @@ from openyxdb._types import (
 
 def _emit(sink: list[Diagnostic], diagnostic: Diagnostic) -> None:
     sink.append(diagnostic)
-    _warnings.warn(diagnostic.message, OpenYXDBWarning, stacklevel=3)
+    # _emit <- _check_field_names <- Reader.__init__ <- the caller
+    _warnings.warn(diagnostic.message, OpenYXDBWarning, stacklevel=4)
 
 
 class Reader:
@@ -38,6 +39,8 @@ class Reader:
     def __init__(
         self, path: str | os.PathLike, *, options: ReadOptions | None = None
     ) -> None:
+        if options is not None and not isinstance(options, ReadOptions):
+            raise TypeError("options must be a ReadOptions")
         self._options = options if options is not None else ReadOptions()
         self._warnings: list[Diagnostic] = []
         self._raw = _core.Reader(
@@ -85,6 +88,10 @@ class Reader:
 
     # -- description -------------------------------------------------------- #
 
+    def _require_open(self) -> None:
+        if self._closed:
+            raise OpenYXDBError("I/O operation on closed Reader")
+
     @property
     def fields(self) -> list[FieldInfo]:
         return list(self._raw.schema)
@@ -96,6 +103,7 @@ class Reader:
 
     @property
     def num_records(self) -> int:
+        self._require_open()
         return self._raw.num_records
 
     @property
@@ -122,25 +130,36 @@ class Reader:
         ``columns`` selects and orders columns by name; ``offset`` and ``limit``
         slice the records. An ``offset`` past the end returns an empty table.
         """
+        self._require_open()
         if offset < 0:
             raise ValueError("offset must be >= 0")
         if limit is not None and limit < 0:
             raise ValueError("limit must be >= 0 or None")
-        data = self._raw.read_columns_subset(
-            list(columns) if columns is not None else None,
-            offset,
-            -1 if limit is None else limit,
-        )
+        names = None
+        if columns is not None:
+            names = list(columns)
+            dup = next((n for n in names if names.count(n) > 1), None)
+            if dup is not None:
+                raise SchemaError(f"column {dup!r} was requested more than once")
+        total = self._raw.num_records
+        start = min(offset, total)
+        # Python ints may exceed the core's 64-bit range; clamp to the file.
+        count = total - start if limit is None else min(limit, total - start)
+        if names is not None and not names:
+            return Table([], [], self._warnings, num_rows=count)
+        data = self._raw.read_columns_subset(names, start, count)
         by_name = {f.name: f for f in self._raw.schema}
-        names = list(data.keys())
+        order = list(data.keys())
         return Table(
-            [by_name[n] for n in names],
-            [data[n] for n in names],
+            [by_name[n] for n in order],
+            [data[n] for n in order],
             self._warnings,
+            num_rows=count,
         )
 
     def read_records(self) -> list[dict[str, Any]]:
         """All records as a list of dicts keyed by field name."""
+        self._require_open()
         return [dict(r) for r in self._raw.read_records()]
 
     # -- lifecycle ---------------------------------------------------------- #
@@ -176,6 +195,8 @@ class Writer:
         *,
         options: WriteOptions | None = None,
     ) -> None:
+        if options is not None and not isinstance(options, WriteOptions):
+            raise TypeError("options must be a WriteOptions")
         self._options = options if options is not None else WriteOptions()
         self._warnings: list[Diagnostic] = []
         self._raw = _core.Writer(
@@ -188,10 +209,14 @@ class Writer:
         return list(self._warnings)
 
     def write_record(self, row: Mapping[str, Any]) -> None:
+        if self._closed:
+            raise OpenYXDBError("I/O operation on closed Writer")
         self._raw.write_record(dict(row))
 
     def write_columns(self, columns: Mapping[str, Sequence[Any]] | Table) -> None:
         """Write columns keyed by name, or a :class:`Table`."""
+        if self._closed:
+            raise OpenYXDBError("I/O operation on closed Writer")
         if isinstance(columns, Table):
             columns = columns.to_dict()
         self._raw.write_columns(

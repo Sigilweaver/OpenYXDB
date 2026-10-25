@@ -166,11 +166,11 @@ pixi run test
 ## String encoding
 
 `String` and `V_String` fields hold bytes with no encoding label. OpenYXDB
-decodes every such value of a file with one encoding, `narrow_encoding`, which
-defaults to strict UTF-8. Bytes that are not valid UTF-8 raise
+decodes every such value of a file with one encoding, `narrow_encoding` (a
+`ReadOptions` / `WriteOptions` field), which defaults to strict UTF-8. Bytes that are not valid UTF-8 raise
 `ConversionError` naming the field, the record and the byte offset. Files from
 Windows tools usually hold single-byte text; read them with
-`narrow_encoding="cp1252"`, or `"latin-1"` (which maps every byte, and is the
+`ReadOptions(narrow_encoding="cp1252")`, or `"latin-1"` (which maps every byte, and is the
 only choice when a file contains the bytes 0x81, 0x8D, 0x8F, 0x90 or 0x9D that
 cp1252 leaves undefined).
 
@@ -186,7 +186,7 @@ Known limits:
   a standard encoding, so there is nothing for a reader to detect.
 - The writer encodes with the same codec and counts field sizes in encoded
   bytes. Narrow fields written as UTF-8 are read as garbage by tools that
-  assume a legacy code page; pass `narrow_encoding="cp1252"` (or
+  assume a legacy code page; pass `WriteOptions(narrow_encoding="cp1252")` (or
   `"latin-1"`) when writing for such tools.
 
 ## Limitations
@@ -200,7 +200,7 @@ Known limits:
 
 ## Testing
 
-The reader has been validated against **1,012 real-world E1 YXDB files** sourced from the community corpus at [Sigilweaver/YXDB-Sources](https://github.com/Sigilweaver/YXDB-Sources), covering a wide range of field types, encodings, record counts (0 to 200k+), and filenames including non-ASCII characters - every file reads; 87 of the 1,001 E1 files hold single-byte text and need `narrow_encoding` (see [String encoding](#string-encoding)).
+The reader has been validated against **1,012 real-world E1 YXDB files** sourced from the community corpus at [Sigilweaver/YXDB-Sources](https://github.com/Sigilweaver/YXDB-Sources), covering a wide range of field types, encodings, record counts (0 to 200k+), and filenames including non-ASCII characters - every file reads; 87 of the 1,001 E1 files hold single-byte text and need `narrow_encoding` in the options (see [String encoding](#string-encoding)).
 
 The 1.3.0 streaming sink (`sink_yxdb`) and DuckDB round-trip paths are exercised against a sampled 25-file subset of the corpus in addition to the per-feature unit tests. Full Python suite: **1,040 passed**.
 

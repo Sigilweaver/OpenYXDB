@@ -32,11 +32,13 @@ from openyxdb._types import (
     WriteOptions,
 )
 
+from importlib.metadata import PackageNotFoundError
+
 try:
-    from importlib.metadata import PackageNotFoundError, version as _version
+    from importlib.metadata import version as _version
 
     __version__ = _version("openyxdb")
-except Exception:  # not installed as a distribution (source checkout)
+except PackageNotFoundError:  # a source checkout that is not installed
     __version__ = "unknown"
 
 __all__ = [
@@ -273,34 +275,10 @@ def _max_utf16_units(values) -> int:
 def _column_to_arrow(fi: FieldInfo, col_data: list, pa):
     """Convert one decoded YXDB column to a PyArrow array.
 
-    Date/Time/DateTime fields are surfaced by the reader as ISO strings and are
-    parsed here into the temporal type declared by :func:`_yxdb_type_to_arrow`.
+    The reader returns Date, Time and DateTime values as ``datetime.date``,
+    ``datetime.time`` and ``datetime.datetime``, so Arrow takes them as they are.
     """
-    arrow_type = _yxdb_type_to_arrow(fi)
-
-    if fi.type == "Date":
-        import datetime
-
-        col_data = [
-            datetime.date.fromisoformat(v) if v is not None else None
-            for v in col_data
-        ]
-    elif fi.type == "Time":
-        import datetime
-
-        col_data = [
-            datetime.time.fromisoformat(v) if v is not None else None
-            for v in col_data
-        ]
-    elif fi.type == "DateTime":
-        import datetime
-
-        col_data = [
-            datetime.datetime.fromisoformat(v) if v is not None else None
-            for v in col_data
-        ]
-
-    return pa.array(col_data, type=arrow_type)
+    return pa.array(col_data, type=_yxdb_type_to_arrow(fi))
 
 
 def to_pyarrow(path: str | os.PathLike, *, options: ReadOptions | None = None):
@@ -334,53 +312,13 @@ def _arrow_schema_to_yxdb(arrow_schema, table=None) -> list[FieldInfo]:
     return schema
 
 
-def _check_temporal(name: str, v) -> None:
-    """Reject values a YXDB Time/DateTime field cannot hold exactly."""
-    if v.tzinfo is not None:
-        raise ConversionError(
-            f"column {name!r}: timezone-aware value {v!r} cannot be stored; "
-            "YXDB date/times have no time zone. Convert to naive local or UTC "
-            "time first."
-        )
-    if v.microsecond != 0 or getattr(v, "nanosecond", 0) != 0:
-        raise ConversionError(
-            f"column {name!r}: value {v!r} has a sub-second part, which YXDB "
-            "Time and DateTime fields cannot store. Truncate or round it first."
-        )
-
-
-def _time_text(name: str, v):
-    if v is None:
-        return None
-    _check_temporal(name, v)
-    return v.isoformat()
-
-
-def _datetime_text(name: str, v):
-    if v is None:
-        return None
-    _check_temporal(name, v)
-    return v.strftime("%Y-%m-%d %H:%M:%S")
-
-
 def _arrow_batch_to_columns(batch, yxdb_schema: list[FieldInfo]) -> dict[str, list]:
     """Convert a PyArrow RecordBatch or Table into a YXDB column dict.
 
-    Applies date/time stringification so the values match the YXDB writer's
-    expected input format.
+    Date, Time and DateTime values stay ``datetime`` objects; the writer checks
+    them (no time zone, no sub-second part) and formats them.
     """
-    columns: dict[str, list] = {}
-    for i, fi in enumerate(yxdb_schema):
-        col = batch.column(i)
-        py_list = col.to_pylist()
-        if fi.type == "Date":
-            py_list = [v.isoformat() if v is not None else None for v in py_list]
-        elif fi.type == "Time":
-            py_list = [_time_text(fi.name, v) for v in py_list]
-        elif fi.type == "DateTime":
-            py_list = [_datetime_text(fi.name, v) for v in py_list]
-        columns[fi.name] = py_list
-    return columns
+    return {fi.name: batch.column(i).to_pylist() for i, fi in enumerate(yxdb_schema)}
 
 
 DEFAULT_WRITE_CHUNK_SIZE = 65_536
@@ -491,28 +429,13 @@ def _yxdb_columns_to_polars(
     columns: dict[str, list[Any]],
     schema_by_name: dict[str, FieldInfo],
 ) -> "pl.DataFrame":
-    """Build a Polars DataFrame from a YXDB column dict using the YXDB schema.
-
-    Applies the same date/time string parsing as ``to_pyarrow`` so types match.
-    """
-    import datetime as _dt
-
+    """Build a Polars DataFrame from a YXDB column dict using the YXDB schema."""
     import polars as pl
 
     series: list[pl.Series] = []
     for name, values in columns.items():
         fi = schema_by_name[name]
-        t = fi.type
-        vals: list[Any] = list(values)
-        if t == "Date":
-            vals = [_dt.date.fromisoformat(v) if v is not None else None for v in vals]
-        elif t == "Time":
-            vals = [_dt.time.fromisoformat(v) if v is not None else None for v in vals]
-        elif t == "DateTime":
-            vals = [
-                _dt.datetime.fromisoformat(v) if v is not None else None for v in vals
-            ]
-        series.append(pl.Series(name, vals, dtype=_yxdb_type_to_polars(fi)))
+        series.append(pl.Series(name, list(values), dtype=_yxdb_type_to_polars(fi)))
     return pl.DataFrame(series)
 
 

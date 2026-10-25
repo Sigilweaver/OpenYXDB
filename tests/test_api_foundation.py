@@ -1,6 +1,7 @@
 """Options, leniency, warnings and the Table result."""
 
 import dataclasses
+import datetime
 
 import pytest
 
@@ -209,3 +210,187 @@ def test_from_pyarrow_accepts_any_arrow_stream(two_cols, tmp_path):
 
 def test_version_is_a_string():
     assert isinstance(openyxdb.__version__, str)
+
+
+# -- use after close ---------------------------------------------------------- #
+
+
+def test_reader_use_after_close_raises(two_cols):
+    with Reader(two_cols) as r:
+        pass
+    for call in (r.read, r.read_records, lambda: r.num_records):
+        with pytest.raises(openyxdb.OpenYXDBError, match="closed"):
+            call()
+    r.close()  # closing twice is fine
+    assert r.closed
+
+
+def test_core_reader_use_after_close_raises_instead_of_crashing(two_cols):
+    from openyxdb import _openyxdb
+
+    r = _openyxdb.Reader(str(two_cols))
+    r.close()
+    for call in (r.read_records, r.read_columns, lambda: r.read_columns_subset(None, 0, 1),
+                 lambda: r.num_records):
+        with pytest.raises(openyxdb.OpenYXDBError, match="closed"):
+            call()
+
+
+def test_writer_wrapper_use_after_close_raises(tmp_path):
+    w = Writer(tmp_path / "x.yxdb", [fi("a")])
+    w.close()
+    with pytest.raises(openyxdb.OpenYXDBError, match="closed"):
+        w.write_record({"a": 1})
+    with pytest.raises(openyxdb.OpenYXDBError, match="closed"):
+        w.write_columns({"a": [1]})
+
+
+# -- FieldInfo does not leak core sentinels ------------------------------------ #
+
+
+def test_field_info_has_no_sentinels(tmp_path):
+    p = tmp_path / "f.yxdb"
+    schema = [
+        FieldInfo(name="i", type="Int32", size=4),
+        FieldInfo(name="d", type="Double", size=8),
+        FieldInfo(name="fd", type="FixedDecimal", size=12, scale=3),
+        FieldInfo(name="s", type="V_String", size=20),
+        FieldInfo(name="b", type="Blob"),
+    ]
+    with Writer(p, schema) as w:
+        w.write_record({"i": 1, "d": 1.5, "fd": 2.5, "s": "x", "b": b"\x01"})
+    with Reader(p) as r:
+        got = {f.name: (f.type, f.size, f.scale) for f in r.fields}
+    assert got["b"] == ("Blob", 0, 0)
+    assert got["i"][2] == 0 and got["d"][2] == 0 and got["s"][2] == 0
+    assert got["fd"][2] == 3
+    assert all(0 <= size < 2**31 - 1 for _, size, _ in got.values())
+    assert all(scale >= 0 for _, _, scale in got.values())
+
+
+# -- typed temporal values ------------------------------------------------------ #
+
+
+def temporal_file(tmp_path):
+    p = tmp_path / "t.yxdb"
+    schema = [
+        FieldInfo(name="d", type="Date", size=10),
+        FieldInfo(name="t", type="Time", size=8),
+        FieldInfo(name="dt", type="DateTime", size=19),
+    ]
+    with Writer(p, schema) as w:
+        w.write_columns(
+            {
+                "d": [datetime.date(2023, 3, 15), "2024-02-29", None],
+                "t": [datetime.time(1, 2, 3), "23:59:59", None],
+                "dt": [datetime.datetime(2023, 3, 15, 1, 2, 3), "2024-02-29 12:00:00", None],
+            }
+        )
+    return p
+
+
+def test_temporal_values_come_back_typed(tmp_path):
+    p = temporal_file(tmp_path)
+    expected = {
+        "d": [datetime.date(2023, 3, 15), datetime.date(2024, 2, 29), None],
+        "t": [datetime.time(1, 2, 3), datetime.time(23, 59, 59), None],
+        "dt": [datetime.datetime(2023, 3, 15, 1, 2, 3), datetime.datetime(2024, 2, 29, 12), None],
+    }
+    assert openyxdb.read_yxdb(p) == expected
+    with Reader(p) as r:
+        assert r.read().to_dict() == expected
+        assert [dict(x) for x in r.read_records()][0]["d"] == datetime.date(2023, 3, 15)
+
+
+def test_temporal_values_convert_to_arrow_and_polars(tmp_path):
+    pa = pytest.importorskip("pyarrow")
+    p = temporal_file(tmp_path)
+    t = openyxdb.to_pyarrow(p)
+    assert [str(f.type) for f in t.schema] == ["date32[day]", "time64[us]", "timestamp[us]"]
+    pl = pytest.importorskip("polars")
+    df = openyxdb.to_polars(p)
+    assert [str(x) for x in df.dtypes] == ["Date", "Time", "Datetime(time_unit='us', time_zone=None)"]
+    assert openyxdb.scan_yxdb(p).collect().equals(df)
+
+
+def test_temporal_table_round_trips_through_the_writer(tmp_path):
+    p = temporal_file(tmp_path)
+    out = tmp_path / "copy.yxdb"
+    with Reader(p) as r:
+        t = r.read()
+    with Writer(out, t.fields) as w:
+        w.write_columns(t)
+    assert openyxdb.read_yxdb(out) == openyxdb.read_yxdb(p)
+
+
+@pytest.mark.parametrize(
+    "field,value,match",
+    [
+        ("dt", datetime.datetime(2023, 1, 1, tzinfo=datetime.timezone.utc), "timezone-aware"),
+        ("dt", datetime.datetime(2023, 1, 1, 0, 0, 0, 5), "sub-second"),
+        ("t", datetime.time(1, 2, 3, 4), "sub-second"),
+        ("t", datetime.time(1, 2, 3, tzinfo=datetime.timezone.utc), "timezone-aware"),
+        ("d", datetime.date(1300, 1, 1), "not a valid"),
+    ],
+)
+def test_unrepresentable_temporal_values_raise(tmp_path, field, value, match):
+    types = {"d": ("Date", 10), "t": ("Time", 8), "dt": ("DateTime", 19)}
+    kind, size = types[field]
+    with pytest.raises(openyxdb.ConversionError, match=match):
+        with Writer(tmp_path / "x.yxdb", [FieldInfo(name=field, type=kind, size=size)]) as w:
+            w.write_record({field: value})
+
+
+def test_wrong_temporal_type_is_a_conversion_error(tmp_path):
+    with pytest.raises(openyxdb.ConversionError, match="column 'd', row 0"):
+        with Writer(tmp_path / "x.yxdb", [FieldInfo(name="d", type="Date", size=10)]) as w:
+            w.write_record({"d": datetime.datetime(2023, 1, 1)})  # a datetime is not a date
+
+
+def test_stored_text_that_is_not_a_date_raises_format_error(tmp_path):
+    p = tmp_path / "bad.yxdb"
+    with Writer(p, [FieldInfo(name="d", type="Date", size=10)]) as w:
+        w.write_record({"d": "2023-01-15"})
+    data = p.read_bytes()
+    assert data.count(b"2023-01-15") == 1
+    p.write_bytes(data.replace(b"2023-01-15", b"2023-13-45"))
+    with pytest.raises(openyxdb.FormatError, match="field 'd', record 0: '2023-13-45' is not a valid Date"):
+        openyxdb.read_yxdb(p)
+
+
+# -- option and argument checks -------------------------------------------------- #
+
+
+def test_options_reject_wrong_types():
+    with pytest.raises(TypeError):
+        ReadOptions(leniency=3)
+    with pytest.raises(TypeError):
+        WriteOptions(narrow_encoding=5)
+    with pytest.raises(TypeError):
+        ReadOptions(allow_unverified_types="yes")
+    with pytest.raises(TypeError):
+        Reader("x.yxdb", options="utf-8")
+    with pytest.raises(TypeError):
+        Writer("x.yxdb", [fi("a")], options=ReadOptions())
+
+
+def test_read_with_no_columns_keeps_the_row_count(two_cols):
+    with Reader(two_cols) as r:
+        t = r.read([])
+    assert t.num_rows == 4 and t.column_names == []
+
+
+def test_read_rejects_repeated_columns_and_clamps_huge_limits(two_cols):
+    with Reader(two_cols) as r:
+        with pytest.raises(SchemaError, match="more than once"):
+            r.read(["a", "a"])
+        assert r.read(limit=10**30).num_rows == 4
+        assert r.read(offset=10**30).num_rows == 0
+
+
+def test_lenient_warning_points_at_the_caller(tmp_path):
+    p = dup_names_file(tmp_path)
+    opts = ReadOptions(leniency=Leniency.RENAME_DUPLICATE_FIELDS)
+    with pytest.warns(OpenYXDBWarning) as rec:
+        Reader(p, options=opts).close()
+    assert rec[0].filename == __file__

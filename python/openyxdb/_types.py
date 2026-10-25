@@ -49,6 +49,20 @@ class Diagnostic:
     record: int | None = None
 
 
+def _check_options(options) -> None:
+    """Reject values of the wrong type early, where the mistake is made."""
+    if not isinstance(options.leniency, Leniency):
+        raise TypeError(
+            f"leniency must be a Leniency, not {type(options.leniency).__name__}"
+        )
+    if not isinstance(options.narrow_encoding, str):
+        raise TypeError("narrow_encoding must be a codec name (str)")
+    if hasattr(options, "allow_unverified_types") and not isinstance(
+        options.allow_unverified_types, bool
+    ):
+        raise TypeError("allow_unverified_types must be a bool")
+
+
 @dataclasses.dataclass(frozen=True, kw_only=True)
 class ReadOptions:
     """Options for reading. All fields are keyword-only and may grow."""
@@ -62,6 +76,9 @@ class ReadOptions:
     #: E2 files only: decode field types whose encoding has not been verified.
     allow_unverified_types: bool = False
 
+    def __post_init__(self) -> None:
+        _check_options(self)
+
 
 @dataclasses.dataclass(frozen=True, kw_only=True)
 class WriteOptions:
@@ -72,3 +89,6 @@ class WriteOptions:
     #: Codec for String and V_String values. Characters it cannot encode raise
     #: :class:`ConversionError`, and field sizes count encoded bytes.
     narrow_encoding: str = "utf-8"
+
+    def __post_init__(self) -> None:
+        _check_options(self)

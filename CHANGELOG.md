@@ -45,6 +45,22 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   `Reader.read`; `Reader.read_records` remains. The `narrow_encoding` and
   `allow_unverified_types` arguments moved into `ReadOptions` and
   `WriteOptions`. `Writer.__exit__` takes the usual three arguments.
+- API breaks: Date, Time and DateTime values are returned as `datetime.date`,
+  `datetime.time` and `datetime.datetime` by `read_records`, `read_yxdb`,
+  `Reader.read` and the core `Reader` (they were ISO strings, parsed later by
+  the Arrow and Polars helpers). The writer accepts those objects as well as
+  ISO strings. A stored value that is not a valid date or time raises
+  `FormatError` naming the field and record.
+- API breaks: `FieldInfo.size` is 0 for Blob and SpatialObj (it was 2147483647)
+  and `FieldInfo.scale` is 0 for every type except FixedDecimal (it was -1 for
+  most types).
+- E2 FixedDecimal values are returned as `float`, like E1 (they were text, which
+  `to_pyarrow` could not convert).
+- Calling `read`, `read_records` or `num_records` on a closed `Reader`, or
+  `write_record` or `write_columns` on a closed `Writer`, raises
+  `OpenYXDBError` instead of crashing. `ReadOptions` and `WriteOptions` check
+  their argument types; `Reader.read` rejects repeated column names and keeps
+  the row count when `columns=[]`.
 
 ### Fixed
 
