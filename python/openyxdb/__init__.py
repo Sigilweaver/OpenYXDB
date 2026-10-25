@@ -201,7 +201,7 @@ def _infer_schema(columns: dict[str, list[Any]]) -> list[FieldInfo]:
                 break
         if sample is None or isinstance(sample, str):
             fi.type = "V_WString"
-            fi.size = 262144
+            fi.size = _max_utf16_units(values)
         elif isinstance(sample, bool):
             fi.type = "Bool"
             fi.size = 1
@@ -216,9 +216,23 @@ def _infer_schema(columns: dict[str, list[Any]]) -> list[FieldInfo]:
             fi.size = 0
         else:
             fi.type = "V_WString"
-            fi.size = 262144
+            fi.size = _max_utf16_units(values)
         schema.append(fi)
     return schema
+
+
+def _max_utf16_units(values) -> int:
+    """Longest string in ``values`` in UTF-16 code units, at least 1.
+
+    A V_WString field truncates at its declared size, so the size comes from
+    the data rather than a fixed default. Non-string values are left for the
+    writer to reject.
+    """
+    longest = 1
+    for v in values:
+        if isinstance(v, str):
+            longest = max(longest, len(v.encode("utf-16-le")) // 2)
+    return longest
 
 
 # --------------------------------------------------------------------------- #
@@ -292,9 +306,51 @@ def to_pyarrow(path: str | os.PathLike):
     return pa.table(arrays, schema=pa.schema(fields))
 
 
-def _arrow_schema_to_yxdb(arrow_schema) -> list[FieldInfo]:
-    """Build a YXDB schema (list[FieldInfo]) from a PyArrow Schema."""
-    return [_arrow_type_to_yxdb(f.name, f.type) for f in arrow_schema]
+def _arrow_schema_to_yxdb(arrow_schema, table=None) -> list[FieldInfo]:
+    """Build a YXDB schema (list[FieldInfo]) from a PyArrow Schema.
+
+    When ``table`` is given, variable-length string columns are sized from the
+    longest value in it instead of a fixed default, so no value is truncated.
+    """
+    schema = [_arrow_type_to_yxdb(f.name, f.type) for f in arrow_schema]
+    if table is not None:
+        import pyarrow.compute as pc
+
+        for i, fi in enumerate(schema):
+            if fi.type == "V_WString":
+                # UTF-8 byte length is an upper bound on UTF-16 code units.
+                longest = pc.max(pc.binary_length(table.column(i))).as_py()
+                fi.size = max(1, longest or 1)
+    return schema
+
+
+def _check_temporal(name: str, v) -> None:
+    """Reject values a YXDB Time/DateTime field cannot hold exactly."""
+    if v.tzinfo is not None:
+        raise ConversionError(
+            f"column {name!r}: timezone-aware value {v!r} cannot be stored; "
+            "YXDB date/times have no time zone. Convert to naive local or UTC "
+            "time first."
+        )
+    if v.microsecond != 0 or getattr(v, "nanosecond", 0) != 0:
+        raise ConversionError(
+            f"column {name!r}: value {v!r} has a sub-second part, which YXDB "
+            "Time and DateTime fields cannot store. Truncate or round it first."
+        )
+
+
+def _time_text(name: str, v):
+    if v is None:
+        return None
+    _check_temporal(name, v)
+    return v.isoformat()
+
+
+def _datetime_text(name: str, v):
+    if v is None:
+        return None
+    _check_temporal(name, v)
+    return v.strftime("%Y-%m-%d %H:%M:%S")
 
 
 def _arrow_batch_to_columns(batch, yxdb_schema: list[FieldInfo]) -> dict[str, list]:
@@ -310,12 +366,9 @@ def _arrow_batch_to_columns(batch, yxdb_schema: list[FieldInfo]) -> dict[str, li
         if fi.type == "Date":
             py_list = [v.isoformat() if v is not None else None for v in py_list]
         elif fi.type == "Time":
-            py_list = [v.isoformat() if v is not None else None for v in py_list]
+            py_list = [_time_text(fi.name, v) for v in py_list]
         elif fi.type == "DateTime":
-            py_list = [
-                v.strftime("%Y-%m-%d %H:%M:%S") if v is not None else None
-                for v in py_list
-            ]
+            py_list = [_datetime_text(fi.name, v) for v in py_list]
         columns[fi.name] = py_list
     return columns
 
@@ -341,7 +394,7 @@ def from_pyarrow(
     """
     if chunk_size is None:
         chunk_size = DEFAULT_WRITE_CHUNK_SIZE
-    schema = _arrow_schema_to_yxdb(table.schema)
+    schema = _arrow_schema_to_yxdb(table.schema, table)
     with Writer(str(path), schema) as w:
         if chunk_size > 0:
             for batch in table.to_batches(max_chunksize=chunk_size):
@@ -576,14 +629,18 @@ def sink_yxdb(
         from_polars(lf, path, chunk_size=chunk_size)
         return
 
-    try:
+    import inspect
+
+    # Older polars versions have no ``engine`` kwarg. Check the signature
+    # instead of catching TypeError, which would also swallow (and re-run
+    # after) a TypeError raised by the query itself.
+    if "engine" in inspect.signature(lf.collect).parameters:
         df = lf.collect(engine=engine)
-    except TypeError:
-        # Older polars versions without the ``engine`` kwarg.
+    else:
         df = lf.collect()
 
     arrow_table = df.to_arrow()
-    schema = _arrow_schema_to_yxdb(arrow_table.schema)
+    schema = _arrow_schema_to_yxdb(arrow_table.schema, arrow_table)
     with Writer(str(path), schema) as w:
         if arrow_table.num_rows == 0:
             return

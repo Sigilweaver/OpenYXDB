@@ -37,6 +37,37 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - Schema errors found while loading field definitions (a zero-length string
   field, a scale larger than the precision, too many fields, a record that is
   too large) are `SchemaError`.
+- Writer: values that do not fit their field now raise `ConversionError`
+  instead of being stored as NULL, `inf`, 0 or a cut-off string: out-of-range
+  Byte, Int16, Float and FixedDecimal values, NaN or infinity in a
+  FixedDecimal, integers a floating point field cannot hold exactly, strings
+  longer than their field, and dates before 1400.
+- Writer: `Decimal` values written to a FixedDecimal field keep their digits
+  instead of passing through a binary double.
+- Writer: timezone-aware values, and Time or DateTime values with a
+  sub-second part, raise `ConversionError` instead of being converted to naive
+  local time or rounded down.
+- Writer: variable-length string columns written by `from_pyarrow`,
+  `from_pandas`, `from_polars`, `from_duckdb`, `sink_yxdb` and `write_yxdb`
+  are sized from the longest value instead of 262144 characters, so long
+  strings are no longer cut.
+- Writer: field names and types are validated and XML-escaped in the schema.
+  Names containing `&`, `<`, `>`, quotes or supplementary characters round
+  trip; unknown type names and control characters raise `SchemaError`.
+- Writer: supplementary characters (such as emoji) in values, field names and
+  paths are written as surrogate pairs instead of `?`. Invalid UTF-8 raises.
+- Writer: a field name the library would rename (case-insensitive duplicate,
+  empty, longer than 255 characters) raises `SchemaError`, as does a column
+  key in `write_record` or `write_columns` that is not a field in the schema.
+- Writer: output is written to `<path>.partial` and moved to `<path>` on
+  `close()`. A process that stops early leaves no file at `<path>` that reads as
+  complete, and an exception inside a `with Writer(...)` block discards the
+  output and leaves any existing file at `<path>` untouched. `Writer.abort()`
+  discards the output explicitly. A `Writer` that fails to finalize while being
+  garbage collected emits a `RuntimeWarning`.
+- Reader: a wide-string value containing a lone UTF-16 surrogate raises
+  `ConversionError` instead of returning U+FFFD.
+- `sink_yxdb` no longer catches `TypeError` from the query and re-runs it.
 
 ### Behavior changes
 
@@ -45,6 +76,12 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   must catch `OpenYXDBError` (or `OSError` for I/O errors).
 - E1 files with file version other than 4 or 5 now raise. No file in the
   1001-file test corpus uses another version.
+- Writing values that do not fit, unknown or ambiguous column keys,
+  names that would be renamed, tz-aware or sub-second temporal values, and
+  invalid UTF-8 now raise where they previously wrote NULL, truncated or
+  altered data. See the Fixed entries for the full list.
+- A `Writer` that is not closed leaves `<path>.partial`, not `<path>`.
+  An exception inside `with Writer(...)` removes the output.
 
 ## [1.5.0] - 2026-09-19
 
