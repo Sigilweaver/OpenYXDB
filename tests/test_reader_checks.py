@@ -99,3 +99,14 @@ def test_scan_full_read_still_works(tmp_path):
     p = tmp_path / "s.yxdb"
     openyxdb.write_yxdb(p, {"a": list(range(10))})
     assert openyxdb.scan_yxdb(p).collect()["a"].to_list() == list(range(10))
+
+
+def test_fixed_decimal_is_the_correctly_rounded_double_of_its_text(tmp_path):
+    """Stored text '0.366119' must read as 0.366119, not 0.36611899999999997."""
+    p = tmp_path / "fd2.yxdb"
+    values = [0.366119, 0.991230, 9.034802, 0.063062, 0.143997, 0.141749, 0.444244]
+    with Writer(str(p), [fi("d", "FixedDecimal", 19, 6)]) as w:
+        for v in values:
+            w.write_record({"d": v})
+    with Reader(str(p)) as r:
+        assert [dict(x)["d"] for x in r.read_records()] == values
