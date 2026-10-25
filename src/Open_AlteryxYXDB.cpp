@@ -178,7 +178,7 @@ unsigned File_Large::Write(const void* _pBuffer, unsigned nNumBytesToWrite)
 	WString errorMsg;
 	ConvertString(errorMsg, strerror(nError));
 	errorMsg.Trim();
-	throw Error(strErrorIntro + errorMsg);
+	throw Error(ErrorKind::IO, strErrorIntro + errorMsg);
 }
 
 Open_AlteryxYXDB::~Open_AlteryxYXDB()
