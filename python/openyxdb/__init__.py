@@ -7,7 +7,6 @@ PyArrow Tables, Pandas DataFrames, and Polars DataFrames.
 from __future__ import annotations
 
 import os
-from collections import Counter
 from pathlib import Path
 from typing import Any
 
@@ -295,18 +294,12 @@ def to_pyarrow(path: str | os.PathLike, *, narrow_encoding: str = "utf-8"):
         schema_info = r.schema
         columns = r.read_columns()
 
-    # Columns are keyed by name, so fields sharing a name share one entry.
-    # Track how many fields still read each name and release the decoded data
-    # only once the last of them has been converted.
-    pending = Counter(fi.name for fi in schema_info)
-
+    # Reader.read_columns raised already if two fields share a name, so each
+    # column belongs to exactly one field and can be released once converted.
     fields = []
     arrays = []
     for fi in schema_info:
-        pending[fi.name] -= 1
-        col_data = (
-            columns.pop(fi.name) if pending[fi.name] == 0 else columns[fi.name]
-        )
+        col_data = columns.pop(fi.name)
         fields.append(pa.field(fi.name, _yxdb_type_to_arrow(fi)))
         arrays.append(_column_to_arrow(fi, col_data, pa))
         del col_data
@@ -550,6 +543,13 @@ def scan_yxdb(path: str | os.PathLike, *, narrow_encoding: str = "utf-8") -> "pl
         schema_info = list(r.schema)
         total_rows = r.num_records
 
+    names = [fi.name for fi in schema_info]
+    if len(set(names)) != len(names):
+        dup = next(n for n in names if names.count(n) > 1)
+        raise SchemaError(
+            f"{path_str!r} has more than one field named {dup!r}; "
+            "a scan keyed by field name cannot represent them"
+        )
     schema_by_name = {fi.name: fi for fi in schema_info}
     pl_schema = pl.Schema({fi.name: _yxdb_type_to_polars(fi) for fi in schema_info})
 
@@ -588,17 +588,19 @@ def scan_yxdb(path: str | os.PathLike, *, narrow_encoding: str = "utf-8") -> "pl
                 # cols is dict[str, list]; count from first projected column.
                 first = next(iter(cols.values()))
                 got = len(first)
-                if got == 0:
-                    break
+                if got < take:
+                    # ``remaining`` never exceeds the file's record count, so a
+                    # short batch means the reader stopped early.
+                    raise FormatError(
+                        f"scan of {path_str!r} returned {offset + got} rows "
+                        f"but the file declares {total_rows}"
+                    )
                 df = _yxdb_columns_to_polars(cols, schema_by_name)
                 if predicate is not None:
                     df = df.filter(predicate)
                 yield df
                 offset += got
                 remaining -= got
-                if got < take:
-                    # Reader is exhausted.
-                    break
 
     return register_io_source(io_source=_source, schema=pl_schema)
 
