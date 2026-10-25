@@ -94,7 +94,7 @@ void File_Large::OpenForRead(WString strFile)
 #endif
 	if (m_iFileDescriptor == -1)
 	{
-		File_Large::GetAndThrowError(U16("Error in OpenForRead: "));
+		ThrowOsError(U16("Error in OpenForRead: "));
 	}
 }
 
@@ -110,7 +110,7 @@ void File_Large::OpenForWrite(WString strFile)
 #endif
 
 	if (m_iFileDescriptor == -1)
-		File_Large::GetAndThrowError(U16("Error in OpenForWrite: "));
+		ThrowOsError(U16("Error in OpenForWrite: "));
 }
 
 int64_t File_Large::Tell() const
@@ -123,7 +123,7 @@ int64_t File_Large::Tell() const
 	seekPos = _lseeki64(m_iFileDescriptor, 0, SEEK_CUR);
 #endif
 	if (seekPos == -1)
-		File_Large::GetAndThrowError(U16("Error in Tell: "));
+		ThrowOsError(U16("Error in Tell: "));
 
 	return seekPos;
 }
@@ -138,7 +138,7 @@ void File_Large::LSeek(int64_t nPos)
 	seekPos = _lseeki64(m_iFileDescriptor, nPos, SEEK_SET);
 #endif
 	if (seekPos == -1)
-		File_Large::GetAndThrowError(U16("Error in LSeek: "));
+		ThrowOsError(U16("Error in LSeek: "));
 }
 
 unsigned File_Large::Read(void* _pBuffer, unsigned nNumBytesToRead)
@@ -152,7 +152,7 @@ unsigned File_Large::Read(void* _pBuffer, unsigned nNumBytesToRead)
 #endif
 
 	if (ret != nNumBytesToRead)
-		File_Large::GetAndThrowError(U16("Error in Read: Unexpected number of bytes to read"));
+		ThrowOsError(U16("Error in Read: Unexpected number of bytes to read"));
 
 	return ret;
 }
@@ -166,7 +166,7 @@ unsigned File_Large::Write(const void* _pBuffer, unsigned nNumBytesToWrite)
 	ret = _write(m_iFileDescriptor, _pBuffer, nNumBytesToWrite);
 #endif
 	if (ret != nNumBytesToWrite)
-		File_Large::GetAndThrowError(U16("Error in Write: "));
+		ThrowOsError(U16("Error in Write: "));
 
 	return ret;
 }
@@ -178,7 +178,19 @@ unsigned File_Large::Write(const void* _pBuffer, unsigned nNumBytesToWrite)
 	WString errorMsg;
 	ConvertString(errorMsg, strerror(nError));
 	errorMsg.Trim();
-	throw Error(strErrorIntro + errorMsg);
+	throw Error(ErrorKind::IO, strErrorIntro + errorMsg);
+}
+
+void File_Large::ThrowOsError(WString strErrorIntro) const
+{
+	int nError = errno;
+
+	WString errorMsg;
+	ConvertString(errorMsg, strerror(nError));
+	errorMsg.Trim();
+	Error e(ErrorKind::IO, strErrorIntro + errorMsg);
+	e.SetOsError(nError, m_strFile);
+	throw e;
 }
 
 Open_AlteryxYXDB::~Open_AlteryxYXDB()

@@ -61,6 +61,8 @@ public:
 	unsigned Write(const void* _pBuffer, unsigned nNumBytesToWrite);
 
 	static void GetAndThrowError(WString strErrorIntro);
+	// Same, but records the file name and errno on the error.
+	void ThrowOsError(WString strErrorIntro) const;
 };
 
 const int RecordsPerBlock = 0x10000;

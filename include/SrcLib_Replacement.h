@@ -621,11 +621,56 @@ public:
 
 typedef TCompare_StrCompactWhitespace<U16unit> Compare_StrCompactWhitespace;
 
+// What went wrong, so callers (and the Python bindings) can tell error classes
+// apart without parsing messages. New values may be added.
+enum class ErrorKind
+{
+	Generic,     // not classified
+	IO,          // the file could not be read or written (OS error, short read)
+	Format,      // the file does not match the YXDB format
+	Schema,      // field types, names or columns are not usable
+	Conversion,  // a value does not fit its field
+	Unsupported  // valid input this library does not handle
+};
+
 class Error
 {
 	String m_strError;
+	ErrorKind m_kind = ErrorKind::Generic;
+	int m_nOsError = 0;  // errno of an IO error, or 0
+	String m_strFile;    // the file an IO error is about, or empty
 
 public:
+	inline Error(ErrorKind kind, const AString& str)
+		: m_strError(MSG_NoXL(str.c_str()))
+		, m_kind(kind)
+	{
+	}
+	inline Error(ErrorKind kind, const String& str)
+		: m_strError(str)
+		, m_kind(kind)
+	{
+	}
+	ErrorKind GetKind() const
+	{
+		return m_kind;
+	}
+	// For ErrorKind::IO: the OS error number and the file it happened on.
+	Error& SetOsError(int nErrno, const String& strFile)
+	{
+		m_nOsError = nErrno;
+		m_strFile = strFile;
+		return *this;
+	}
+	int GetOsError() const
+	{
+		return m_nOsError;
+	}
+	const String& GetFile() const
+	{
+		return m_strFile;
+	}
+
 	inline Error(const String& str)
 		: m_strError(str) /* XMSG() */
 	{
