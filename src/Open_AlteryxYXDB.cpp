@@ -4,6 +4,7 @@
 #include "Open_AlteryxYXDB.h"
 
 #include <cerrno>
+#include <cstdio>
 #include <cstring>
 #include <string>
 
@@ -84,6 +85,42 @@ void File_Large::Close()
 	}
 }
 
+// Flush file data to stable storage so a write error the system defers until
+// now is reported here and not lost.
+void File_Large::Sync()
+{
+#ifdef __GNUG__
+	if (fsync(m_iFileDescriptor) != 0)
+#else
+	if (_commit(m_iFileDescriptor) != 0)
+#endif
+		ThrowOsError(U16("Error in Sync: "));
+}
+
+// Like Close(), but reports a failure of close(2) itself.
+void File_Large::CloseChecked()
+{
+	if (m_iFileDescriptor == -1)
+		return;
+	int fd = m_iFileDescriptor;
+	m_iFileDescriptor = -1;
+#ifdef __GNUG__
+	int rc = close(fd);
+#else
+	int rc = _close(fd);
+#endif
+	if (rc != 0)
+	{
+		int nError = errno;
+		WString errorMsg;
+		ConvertString(errorMsg, strerror(nError));
+		errorMsg.Trim();
+		Error e(ErrorKind::IO, U16("Error in Close: ") + errorMsg);
+		e.SetOsError(nError, m_strFile);
+		throw e;
+	}
+}
+
 void File_Large::OpenForRead(WString strFile)
 {
 	m_strFile = strFile;
@@ -106,7 +143,7 @@ void File_Large::OpenForWrite(WString strFile)
 
 #ifdef __GNUG__
 	AString astrFile = WStringToUtf8Path(strFile);
-	m_iFileDescriptor = open(astrFile.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_BINARY, S_IRUSR | S_IWUSR);
+	m_iFileDescriptor = open(astrFile.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_BINARY, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH | S_IWOTH);
 #else
 	m_iFileDescriptor = _wopen(strFile, _O_RDWR | _O_CREAT | _O_TRUNC | _O_BINARY, _S_IREAD | _S_IWRITE);
 #endif
@@ -212,6 +249,9 @@ Open_AlteryxYXDB::~Open_AlteryxYXDB()
 	}
 	catch (...)
 	{
+		// A destructor cannot throw. Callers who need to know whether the final
+		// write succeeded must call Close() themselves.
+		fprintf(stderr, "OpenYXDB: an error occurred while closing a file in a destructor\n");
 	}
 }
 
@@ -235,7 +275,8 @@ Open_AlteryxYXDB::~Open_AlteryxYXDB()
 
 			m_pFile->LSeek(0);
 			m_pFile->Write(&m_header, sizeof(m_header));
-			m_pFile->Close();
+			m_pFile->Sync();
+			m_pFile->CloseChecked();
 		}
 		else
 			m_pFile->Close();

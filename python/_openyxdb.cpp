@@ -7,6 +7,18 @@
 
 #include <algorithm>
 #include <cerrno>
+#include <cfloat>
+#include <cmath>
+#include <cstdio>
+#include <filesystem>
+#include <system_error>
+#include <atomic>
+#include <typeinfo>
+#ifdef _WIN32
+#include <process.h>
+#else
+#include <unistd.h>
+#endif
 #include <unordered_map>
 #include <unordered_set>
 
@@ -22,8 +34,17 @@ using namespace nb::literals;
 using namespace Alteryx::OpenYXDB;
 using namespace SRC;
 
+// Raise an Error of a given kind with a UTF-8 message. The bindings translate
+// it to the matching openyxdb exception class.
+static WString utf8_to_wstring(const std::string& s);
+[[noreturn]] static void raise_error(ErrorKind kind, const std::string& msg) {
+    throw SRC::Error(kind, utf8_to_wstring(msg));
+}
+
 // Convert U16unit (char16_t) string to std::string (UTF-8)
-static std::string u16_to_utf8(const U16unit* s, size_t len) {
+// strict=false is only for building error messages, where a replacement
+// character beats a second exception.
+static std::string u16_to_utf8(const U16unit* s, size_t len, bool strict = true) {
     std::string result;
     result.reserve(len);
     for (size_t i = 0; i < len; ++i) {
@@ -42,8 +63,10 @@ static std::string u16_to_utf8(const U16unit* s, size_t len) {
             result.push_back(static_cast<char>(0xC0 | (c >> 6)));
             result.push_back(static_cast<char>(0x80 | (c & 0x3F)));
         } else if (c < 0x10000) {
-            // Lone surrogates -> U+FFFD replacement character
             if (c >= 0xD800 && c <= 0xDFFF) {
+                if (strict)
+                    raise_error(ErrorKind::Conversion, 
+                        "lone UTF-16 surrogate in string at character " + std::to_string(i));
                 result.push_back(static_cast<char>(0xEF));
                 result.push_back(static_cast<char>(0xBF));
                 result.push_back(static_cast<char>(0xBD));
@@ -63,39 +86,63 @@ static std::string u16_to_utf8(const U16unit* s, size_t len) {
 }
 
 // Convert WString to std::string (UTF-8)
-static std::string wstring_to_utf8(const WString& ws) {
+static std::string wstring_to_utf8(const WString& ws, bool strict = true) {
     const U16unit* p = ws.c_str();
     size_t len = 0;
     while (p[len] != 0) ++len;
-    return u16_to_utf8(p, len);
+    return u16_to_utf8(p, len, strict);
 }
 
-// Convert std::string (UTF-8) to WString (UTF-16)
+// Convert std::string (UTF-8) to WString (UTF-16).
+// Strict: malformed UTF-8 (truncated or stray continuation bytes, overlong
+// forms, surrogates, values above U+10FFFF) raises ValueError instead of being
+// repaired. Supplementary characters become surrogate pairs.
 static WString utf8_to_wstring(const std::string& s) {
     std::vector<U16unit> buf;
-    buf.reserve(s.size());
+    buf.reserve(s.size() + 1);
+    const size_t n = s.size();
     size_t i = 0;
-    while (i < s.size()) {
-        uint32_t cp;
+    auto bad = [&](const char* why) {
+        raise_error(ErrorKind::Conversion, 
+            std::string("invalid UTF-8 (") + why + ") at byte " + std::to_string(i));
+    };
+    auto cont = [&](size_t k) -> uint32_t {
+        if (i + k >= n) bad("truncated sequence");
+        unsigned char b = static_cast<unsigned char>(s[i + k]);
+        if ((b & 0xC0) != 0x80) bad("expected continuation byte");
+        return b & 0x3F;
+    };
+    while (i < n) {
         unsigned char c = static_cast<unsigned char>(s[i]);
+        uint32_t cp;
+        size_t len;
         if (c < 0x80) {
             cp = c;
-            i += 1;
-        } else if ((c & 0xE0) == 0xC0) {
-            cp = (c & 0x1F) << 6;
-            if (i + 1 < s.size()) cp |= (static_cast<unsigned char>(s[i+1]) & 0x3F);
-            i += 2;
+            len = 1;
+        } else if (c >= 0xC2 && c <= 0xDF) {
+            cp = ((c & 0x1F) << 6) | cont(1);
+            len = 2;
         } else if ((c & 0xF0) == 0xE0) {
-            cp = (c & 0x0F) << 12;
-            if (i + 1 < s.size()) cp |= (static_cast<unsigned char>(s[i+1]) & 0x3F) << 6;
-            if (i + 2 < s.size()) cp |= (static_cast<unsigned char>(s[i+2]) & 0x3F);
-            i += 3;
+            cp = ((c & 0x0F) << 12) | (cont(1) << 6) | cont(2);
+            len = 3;
+            if (cp < 0x800) bad("overlong encoding");
+            if (cp >= 0xD800 && cp <= 0xDFFF) bad("surrogate code point");
+        } else if (c >= 0xF0 && c <= 0xF4) {
+            cp = ((c & 0x07) << 18) | (cont(1) << 12) | (cont(2) << 6) | cont(3);
+            len = 4;
+            if (cp < 0x10000) bad("overlong encoding");
+            if (cp > 0x10FFFF) bad("code point above U+10FFFF");
         } else {
-            // 4-byte UTF-8 -> surrogate pair (BMP only for now)
-            cp = '?';
-            i += 4;
+            bad("invalid lead byte");
         }
-        buf.push_back(static_cast<U16unit>(cp));
+        if (cp >= 0x10000) {
+            cp -= 0x10000;
+            buf.push_back(static_cast<U16unit>(0xD800 + (cp >> 10)));
+            buf.push_back(static_cast<U16unit>(0xDC00 + (cp & 0x3FF)));
+        } else {
+            buf.push_back(static_cast<U16unit>(cp));
+        }
+        i += len;
     }
     buf.push_back(0);
     return WString(buf.data());
@@ -150,7 +197,7 @@ static E_FieldType field_type_from_name(const std::string& name) {
     if (name == "DateTime")     return E_FT_DateTime;
     if (name == "Blob")         return E_FT_Blob;
     if (name == "SpatialObj")   return E_FT_SpatialObj;
-    throw std::invalid_argument("Unknown field type: " + name);
+    raise_error(ErrorKind::Schema, "Unknown field type: " + name);
 }
 
 // Convert narrow string bytes to a Python str.
@@ -468,7 +515,7 @@ public:
             for (const auto& name : *columns) {
                 auto it = by_name.find(name);
                 if (it == by_name.end()) {
-                    throw std::invalid_argument(
+                    raise_error(ErrorKind::Schema, 
                         "Unknown column in projection: " + name);
                 }
                 proj_indices.push_back(it->second);
@@ -532,8 +579,49 @@ public:
     YXDBReader& enter() { return *this; }
 };
 
+// Engine installed on the writer's fields. Any warning or field conversion
+// error (truncation, out-of-range numbers, invalid dates, ...) becomes an
+// exception instead of being dropped.
+class RaisingEngine : public GenericEngineBase {
+public:
+    RaisingEngine() : GenericEngineBase(1) {}
+    using GenericEngineBase::OutputMessage;
+    long OutputMessage(MessageType mt, const U16unit* pMessage) const override {
+        if (mt == MT_Info) return 0;
+        throw SRC::Error(ErrorKind::Conversion, String(pMessage));
+    }
+    void QueueThread(ThreadProc, void*) const override {}
+    bool Ping() const override { return true; }
+};
+
+// Escape a value for use inside a double-quoted XML attribute.
+static std::string xml_escape_attr(const std::string& v, const char* what) {
+    std::string out;
+    out.reserve(v.size());
+    for (unsigned char c : v) {
+        switch (c) {
+            case '&': out += "&amp;"; break;
+            case '<': out += "&lt;"; break;
+            case '>': out += "&gt;"; break;
+            case '"': out += "&quot;"; break;
+            case '\'': out += "&apos;"; break;
+            default:
+                if (c < 0x20 || c == 0x7F) {
+                    char b[8];
+                    std::snprintf(b, sizeof b, "%02X", c);
+                    raise_error(ErrorKind::Schema, 
+                        std::string(what) + " contains control character U+00" + b
+                        + ", which cannot be stored in the schema");
+                }
+                out += static_cast<char>(c);
+        }
+    }
+    return out;
+}
+
 // Python-facing Writer class
 class YXDBWriter {
+    RaisingEngine m_engine;
     Open_AlteryxYXDB m_db;
     RecordInfo m_recordInfo;
     SmartPointerRefObj<Record> m_record;
@@ -542,13 +630,38 @@ class YXDBWriter {
     // Python str objects for m_fieldNames, built once so the per-record write
     // loop can look up dict entries without allocating a key each time.
     std::vector<nb::str> m_fieldKeys;
+    std::unordered_set<std::string> m_fieldNameSet;
+    // The file is written to m_tmpPath and renamed to m_finalPath only when the
+    // writer closes cleanly, so an interrupted write never leaves something
+    // that reads as a complete file.
+    std::string m_finalPath;
+    std::string m_tmpPath;
+    int64_t m_rowsWritten = 0;
     bool m_open = false;
 
-    void build_schema_xml(const std::vector<FieldInfo>& schema, WString& xml) {
+    // <path>.<pid>-<n>.partial: unique per writer, so two writers aimed at one
+    // path never share a temporary file.
+    static std::string partial_name(const std::string& path) {
+        static std::atomic<unsigned> counter{0};
+#ifdef _WIN32
+        unsigned long pid = static_cast<unsigned long>(_getpid());
+#else
+        unsigned long pid = static_cast<unsigned long>(getpid());
+#endif
+        return path + "." + std::to_string(pid) + "-" + std::to_string(counter++) + ".partial";
+    }
+
+    void require_open() const {
+        if (!m_open) raise_error(ErrorKind::Generic, "I/O operation on closed Writer");
+    }
+
+    static void build_schema_xml(const std::vector<FieldInfo>& schema, WString& xml) {
         std::string s = "<RecordInfo>";
         for (const auto& fi : schema) {
+            // Validates the type name; throws on anything but the 17 known names.
+            field_type_from_name(fi.type);
             s += "<Field name=\"";
-            s += fi.name;
+            s += xml_escape_attr(fi.name, "field name");
             s += "\" type=\"";
             s += fi.type;
             s += "\"";
@@ -568,39 +681,132 @@ class YXDBWriter {
         xml = utf8_to_wstring(s);
     }
 
-public:
-    YXDBWriter(const std::string& path, const std::vector<FieldInfo>& schema) {
-        WString xml;
-        build_schema_xml(schema, xml);
-        m_db.Create(utf8_to_wstring(path), xml.c_str());
-        m_open = true;
-
-        unsigned nFields = m_db.m_recordInfo.NumFields();
-        m_fields.reserve(nFields);
-        m_fieldNames.reserve(nFields);
-        m_fieldKeys.reserve(nFields);
-        for (unsigned i = 0; i < nFields; ++i) {
-            const FieldBase* f = m_db.m_recordInfo[i];
-            m_fields.push_back(f);
-            m_fieldNames.push_back(wstring_to_utf8(WString(f->GetFieldName().c_str())));
-            m_fieldKeys.emplace_back(m_fieldNames.back().c_str(),
-                                     m_fieldNames.back().size());
+    // Remove the temporary file. A failure to remove it is reported as a
+    // warning: the caller is usually already unwinding and cannot take another
+    // exception.
+    void discard_partial_file() noexcept {
+        std::error_code ec;
+        std::filesystem::remove(std::filesystem::u8path(m_tmpPath), ec);
+        if (ec) {
+            PyErr_WarnFormat(PyExc_RuntimeWarning, 1, "could not remove partial file '%s': %s",
+                             m_tmpPath.c_str(), ec.message().c_str());
+            if (PyErr_Occurred()) PyErr_WriteUnraisable(nullptr);
         }
-        m_record = m_db.m_recordInfo.CreateRecord();
     }
 
-    ~YXDBWriter() { close(); }
+public:
+    YXDBWriter(const std::string& path, const std::vector<FieldInfo>& schema)
+        : m_finalPath(path), m_tmpPath(partial_name(path)) {
+        if (schema.empty())
+            raise_error(ErrorKind::Schema, "a Writer needs at least one field");
+        WString xml;
+        build_schema_xml(schema, xml);
 
-    void close() {
-        if (m_open) {
-            m_db.Close();
-            m_open = false;
+        // Check the whole schema before anything is created on disk: sizes,
+        // scales and record size limits, and that no name would be renamed.
+        {
+            RecordInfo probe;
+            probe.InitFromXml(xml.c_str());
+            if (probe.NumFields() != schema.size())
+                raise_error(ErrorKind::Schema,
+                    "schema has " + std::to_string(schema.size()) + " fields but "
+                    + std::to_string(probe.NumFields()) + " were created");
+            for (unsigned i = 0; i < probe.NumFields(); ++i) {
+                std::string stored = wstring_to_utf8(WString(probe[i]->GetFieldName().c_str()));
+                // The writer matches input columns to fields by name, so the
+                // library must not have renamed, truncated or de-duplicated it.
+                if (stored != schema[i].name)
+                    raise_error(ErrorKind::Schema,
+                        "field name '" + schema[i].name + "' is not usable as written (it would be stored as '"
+                        + stored + "'): names must be unique ignoring case, non-empty, and at most "
+                        "255 characters");
+            }
         }
+
+        try {
+            m_db.Create(utf8_to_wstring(m_tmpPath), xml.c_str());
+            m_open = true;
+
+            unsigned nFields = m_db.m_recordInfo.NumFields();
+            m_fields.reserve(nFields);
+            m_fieldNames.reserve(nFields);
+            m_fieldKeys.reserve(nFields);
+            for (unsigned i = 0; i < nFields; ++i) {
+                const FieldBase* f = m_db.m_recordInfo[i];
+                m_fields.push_back(f);
+                m_fieldNames.push_back(wstring_to_utf8(WString(f->GetFieldName().c_str())));
+                m_fieldNameSet.insert(m_fieldNames.back());
+                m_fieldKeys.emplace_back(m_fieldNames.back().c_str(),
+                                         m_fieldNames.back().size());
+            }
+            m_record = m_db.m_recordInfo.CreateRecord();
+            // From here on, conversion warnings raise. Installed after Create so
+            // the compressor, which also receives the engine from the record
+            // info, stays single-threaded.
+            m_db.m_recordInfo.SetGenericEngine(&m_engine);
+        } catch (...) {
+            try {
+                m_db.Close();
+            } catch (...) {
+                // The partial file is removed next; the original error is the
+                // one worth reporting.
+            }
+            m_open = false;
+            discard_partial_file();
+            throw;
+        }
+    }
+
+    // A writer that is dropped without close() never publishes its output: the
+    // data may be incomplete, and nothing says the caller meant to finish.
+    ~YXDBWriter() {
+        if (m_open) {
+            abort();
+            PyErr_WarnFormat(PyExc_ResourceWarning, 1,
+                             "Writer for '%s' was not closed; its output was discarded",
+                             m_finalPath.c_str());
+            if (PyErr_Occurred()) PyErr_WriteUnraisable(nullptr);
+        }
+    }
+
+    // Finalize the file and move it into place.
+    void close() {
+        if (!m_open) return;
+        m_open = false;
+        try {
+            // Flushes, fsyncs and closes, throwing if the system reports a
+            // deferred write error.
+            m_db.Close();
+            std::filesystem::rename(std::filesystem::u8path(m_tmpPath),
+                                    std::filesystem::u8path(m_finalPath));
+        } catch (const std::filesystem::filesystem_error& e) {
+            discard_partial_file();
+            raise_error(ErrorKind::IO, std::string("could not move the finished file into place: ") + e.what());
+        } catch (...) {
+            discard_partial_file();
+            throw;
+        }
+    }
+
+    // Close without finalizing and remove the partial output. Used when the
+    // `with` block exits with an exception.
+    void abort() {
+        if (!m_open) return;
+        m_open = false;
+        try {
+            m_db.Close();
+        } catch (...) {
+            // The output is being discarded; the caller is already propagating
+            // the error that caused the abort.
+        }
+        discard_partial_file();
     }
 
     void write_record(const nb::dict& row) {
+        require_open();
         Record* rec = m_record.Get();
         rec->Reset();
+        size_t matched = 0;
         for (size_t i = 0; i < m_fields.size(); ++i) {
             const FieldBase* field = m_fields[i];
             const nb::str& key = m_fieldKeys[i];
@@ -608,19 +814,25 @@ public:
                 field->SetNull(rec);
                 continue;
             }
+            ++matched;
             nb::object val = row[key];
             if (val.is_none()) {
                 field->SetNull(rec);
                 continue;
             }
-            set_field_from_python(field, rec, val);
+            store(field, rec, val, m_rowsWritten);
         }
+        if (matched != nb::len(row)) reject_unknown_keys(row);
         m_db.AppendRecord(rec->GetRecord());
+        ++m_rowsWritten;
     }
 
     void write_columns(const nb::dict& columns) {
+        require_open();
         if (m_fields.empty()) return;
         size_t nFields = m_fields.size();
+
+        reject_unknown_keys(columns);
 
         // Resolve every field's column once. Fields absent from `columns` get
         // a null entry and are written as NULL for every record.
@@ -643,7 +855,7 @@ public:
                 n = len;
                 have_n = true;
             } else if (len != n) {
-                throw std::invalid_argument(
+                raise_error(ErrorKind::Schema, 
                     "column '" + m_fieldNames[f] + "' has " + std::to_string(len)
                     + " values but " + std::to_string(n) + " were expected");
             }
@@ -664,16 +876,59 @@ public:
                     field->SetNull(rec);
                     continue;
                 }
-                set_field_from_python(field, rec, val);
+                store(field, rec, val, m_rowsWritten + static_cast<int64_t>(row));
             }
             m_db.AppendRecord(rec->GetRecord());
         }
+        m_rowsWritten += static_cast<int64_t>(n);
     }
 
     // Context manager support
     YXDBWriter& enter() { return *this; }
 
 private:
+    // Store one value, turning every failure into an OpenYXDBError that names
+    // the column and the row.
+    void store(const FieldBase* field, Record* rec, nb::handle val, int64_t row) {
+        auto where = [&]() {
+            return "column '" + wstring_to_utf8(WString(field->GetFieldName().c_str()), false)
+                   + "', row " + std::to_string(row);
+        };
+        auto cannot_store = [&]() {
+            std::string r;
+            try {
+                r = nb::cast<std::string>(nb::repr(val));
+            } catch (...) {
+                r = "?";
+            }
+            if (r.size() > 60) r = r.substr(0, 57) + "...";
+            raise_error(ErrorKind::Conversion,
+                        where() + ": a " + std::string(Py_TYPE(val.ptr())->tp_name) + " value " + r
+                            + " cannot be stored in a " + field_type_name(field->m_ft) + " field");
+        };
+        try {
+            set_field_from_python(field, rec, val);
+        } catch (const nb::cast_error&) {  // also std::bad_cast
+            cannot_store();
+        } catch (const nb::builtin_exception&) {
+            cannot_store();
+        } catch (const SRC::Error& e) {
+            throw SRC::Error(e.GetKind(),
+                             utf8_to_wstring(where() + ": ") + e.GetErrorDescription());
+        }
+    }
+
+    // Every key supplied by the caller must name a schema field; a typo would
+    // otherwise silently write that column as all NULL.
+    void reject_unknown_keys(const nb::dict& d) const {
+        for (auto item : d) {
+            std::string k = nb::cast<std::string>(item.first);
+            if (m_fieldNameSet.find(k) == m_fieldNameSet.end())
+                raise_error(ErrorKind::Schema, 
+                    "'" + k + "' is not a field in the schema");
+        }
+    }
+
     static void set_field_from_python(const FieldBase* field, Record* rec, nb::handle val) {
         switch (field->m_ft) {
             case E_FT_Bool:
@@ -688,10 +943,28 @@ private:
                 field->SetFromInt64(rec, nb::cast<int64_t>(val));
                 break;
             case E_FT_Float:
-            case E_FT_Double:
-            case E_FT_FixedDecimal:
-                field->SetFromDouble(rec, nb::cast<double>(val));
+            case E_FT_Double: {
+                double d = python_to_double(val);
+                if (field->m_ft == E_FT_Float && std::isfinite(d) && std::fabs(d) > FLT_MAX)
+                    raise_error(ErrorKind::Conversion, 
+                        "value " + nb::cast<std::string>(nb::str(val)) + " does not fit in a Float field");
+                field->SetFromDouble(rec, d);
                 break;
+            }
+            case E_FT_FixedDecimal: {
+                // Decimal and int values go through their exact text form so no
+                // digits are lost to a binary double.
+                if (nb::isinstance<nb::float_>(val)) {
+                    double d = nb::cast<double>(val);
+                    if (!std::isfinite(d))
+                        raise_error(ErrorKind::Conversion, "FixedDecimal cannot store NaN or infinity");
+                    field->SetFromDouble(rec, d);
+                } else {
+                    std::string s = nb::cast<std::string>(nb::str(val));
+                    field->SetFromString(rec, s.c_str(), s.size());
+                }
+                break;
+            }
             case E_FT_String:
             case E_FT_V_String:
             case E_FT_Date:
@@ -720,8 +993,24 @@ private:
                 break;
             }
             default:
-                break;
+                raise_error(ErrorKind::Unsupported, "unsupported field type in writer");
         }
+    }
+
+    // int -> double only when the integer is exactly representable.
+    static double python_to_double(nb::handle val) {
+        if (PyLong_Check(val.ptr()) && !PyBool_Check(val.ptr())) {
+            double d = PyLong_AsDouble(val.ptr());
+            if (d == -1.0 && PyErr_Occurred()) throw nb::python_error();
+            nb::object back = nb::steal(PyLong_FromDouble(d));
+            if (!back.is_valid()) throw nb::python_error();
+            if (PyObject_RichCompareBool(back.ptr(), val.ptr(), Py_EQ) != 1)
+                raise_error(ErrorKind::Conversion, 
+                    "integer " + nb::cast<std::string>(nb::str(val))
+                    + " cannot be stored exactly in a floating point field");
+            return d;
+        }
+        return nb::cast<double>(val);
     }
 };
 
@@ -773,7 +1062,7 @@ NB_MODULE(_openyxdb, m) {
         try {
             std::rethrow_exception(p);
         } catch (const SRC::Error& e) {
-            std::string msg = wstring_to_utf8(e.GetErrorDescription());
+            std::string msg = wstring_to_utf8(e.GetErrorDescription(), false);
             PyObject* cls = ex_base.ptr();
             switch (e.GetKind()) {
                 case ErrorKind::IO: cls = ex_io.ptr(); break;
@@ -787,7 +1076,7 @@ NB_MODULE(_openyxdb, m) {
                 int en = e.GetOsError();
                 if (en == ENOENT) cls = ex_notfound.ptr();
                 else if (en == EACCES || en == EPERM) cls = ex_perm.ptr();
-                std::string file = wstring_to_utf8(e.GetFile());
+                std::string file = wstring_to_utf8(e.GetFile(), false);
                 PyObject* exc = PyObject_CallFunction(cls, "isO", en, msg.c_str(),
                     file.empty() ? Py_None : nb::str(file.c_str()).ptr());
                 if (exc) {
@@ -849,5 +1138,13 @@ NB_MODULE(_openyxdb, m) {
         .def("write_columns", &YXDBWriter::write_columns, "columns"_a,
              "Write records from columnar data (dict of column name to list)")
         .def("__enter__", &YXDBWriter::enter, nb::rv_policy::reference)
-        .def("__exit__", [](YXDBWriter& self, nb::args) { self.close(); });
+        .def("abort", &YXDBWriter::abort,
+             "Discard the output without finalizing it")
+        .def("__exit__", [](YXDBWriter& self, nb::args args) {
+            // An exception inside the `with` block discards the partial file.
+            if (args.size() > 0 && !args[0].is_none())
+                self.abort();
+            else
+                self.close();
+        });
 }
