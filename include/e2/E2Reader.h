@@ -15,11 +15,19 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <unordered_map>
 #include <vector>
 
 namespace Alteryx { namespace OpenYXDB { namespace e2 {
+
+// Thrown when an E2 file does not match the format. The Python bindings
+// translate it to openyxdb.FormatError.
+class E2FormatError : public std::runtime_error {
+public:
+    explicit E2FormatError(const std::string& msg) : std::runtime_error(msg) {}
+};
 
 // Mirrors the names exposed by FieldInfo from the Python binding.
 enum class E2FieldType {

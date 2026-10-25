@@ -102,6 +102,19 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   `FormatError` instead of becoming NULL.
 - A read that runs out of records before the declared count raises instead
   of returning fewer rows.
+- E2: Byte values above 127 are read as unsigned (200 was returned as -56 by
+  `read_columns` and `read_records`).
+- E2: Time and DateTime values with a sub-second part, or a time of day of 24
+  hours or more, raise `FormatError` instead of dropping the fraction or
+  printing an hour such as `30:00:00`.
+- E2: a file must contain the end-of-data marker and end with the `YXE2`
+  trailer, and the records of a block must fill the block exactly. A file cut
+  off after a block, or with extra bytes in a block, raises `FormatError`
+  instead of returning the rows read so far.
+- E2: a `<Field>` element without a name or type raises, and attribute names in
+  the metadata match whole words (`rename` is no longer read as `name`).
+- E2: an inline blob reference seen after more than one blob block raises,
+  because the reference does not say which block it points into.
 
 ### Behavior changes
 
@@ -124,6 +137,7 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   value that is not valid UTF-8; 81 of them read with `cp1252` and 6 need
   `latin-1` (cp1252 leaves five byte values undefined). Files that mix UTF-8
   and single-byte values need a per-value fallback, which is not offered.
+- E2 errors are raised as `FormatError` instead of `RuntimeError`.
 
 ## [1.5.0] - 2026-09-19
 

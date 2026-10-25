@@ -103,7 +103,7 @@ std::optional<E2FieldType> E2FieldTypeFromName(const std::string& n) {
 
 namespace {
 
-[[noreturn]] void Fail(const std::string& msg) { throw std::runtime_error(msg); }
+[[noreturn]] void Fail(const std::string& msg) { throw E2FormatError(msg); }
 
 uint32_t LoadU32LE(const uint8_t* p) {
     return static_cast<uint32_t>(p[0]) |
@@ -123,8 +123,16 @@ uint64_t LoadU64LE(const uint8_t* p) {
 // Minimal XML attribute extractor: scans for name="..." inside a tag.
 std::string GetAttr(const std::string& tag, const std::string& attr) {
     std::string key = attr + "=\"";
-    size_t p = tag.find(key);
-    if (p == std::string::npos) return {};
+    size_t p = 0;
+    for (;;) {
+        p = tag.find(key, p);
+        if (p == std::string::npos) return {};
+        // Match whole attribute names only: "name" must not match "rename".
+        if (p == 0 || tag[p - 1] == ' ' || tag[p - 1] == '\t' || tag[p - 1] == '\n' ||
+            tag[p - 1] == '\r')
+            break;
+        p += key.size();
+    }
     p += key.size();
     size_t end = tag.find('"', p);
     if (end == std::string::npos) return {};
@@ -169,7 +177,9 @@ void ParseMetaXml(const std::string& xml, std::vector<E2FieldMeta>& fields) {
         std::string type_str = GetAttr(tag, "type");
         std::string size_str = GetAttr(tag, "size");
         std::string scale_str = GetAttr(tag, "scale");
-        if (m.name.empty() || type_str.empty()) continue;
+        if (m.name.empty() || type_str.empty())
+            Fail("E2 metadata: <Field> element " + std::to_string(fields.size() + 1) +
+                 " has no name or no type");
         auto ft = E2FieldTypeFromName(type_str);
         if (!ft) Fail("E2 metadata: unknown field type '" + type_str + "'");
         m.type = *ft;
@@ -205,6 +215,21 @@ std::string FormatDate(int64_t day_serial) {
     char buf[32];
     std::snprintf(buf, sizeof(buf), "%04d-%02d-%02d", y, mo, d);
     return std::string(buf);
+}
+
+// Time of day is stored in centiseconds. The output has whole-second
+// resolution, so a fraction or a value of 24 hours or more is an error instead
+// of being cut off or printed as an hour that does not exist. Decoders only
+// record the value (E2Cell::integer); the check runs once a row has been
+// accepted, because decoding is also used to probe candidate layouts and a
+// failure there means "not this layout", not "bad file".
+void CheckTimeOfDay(uint64_t centi, const char* what) {
+    if (centi >= 24ull * 3600ull * 100ull)
+        Fail(std::string("E2 ") + what + ": time of day " + std::to_string(centi) +
+             " centiseconds is 24 hours or more");
+    if (centi % 100 != 0)
+        Fail(std::string("E2 ") + what + ": time of day " + std::to_string(centi) +
+             " centiseconds has a sub-second part, which is not supported");
 }
 
 std::string FormatDateTimePacked(uint64_t raw) {
@@ -273,7 +298,8 @@ E2Cell DecodeBool(const uint8_t* p, size_t len, size_t* consumed) {
 
 // Compact int with configurable base (6 for byte/int16/int32/int64).
 E2Cell DecodeCompactInt(const uint8_t* p, size_t len, size_t* consumed,
-                        uint8_t base, uint8_t null_byte, int max_bytes) {
+                        uint8_t base, uint8_t null_byte, int max_bytes,
+                        bool is_unsigned = false) {
     NeedBytes(1, len, "Int");
     uint8_t prefix = p[0];
     if (prefix == null_byte) { *consumed = 1; return E2Cell::MakeNull(); }
@@ -288,7 +314,7 @@ E2Cell DecodeCompactInt(const uint8_t* p, size_t len, size_t* consumed,
     // Sign-extend from `n` bytes into int64. For sub-8-byte sources we
     // sign-extend so e.g. Int32 -1 (`0x0A FF FF FF FF`) becomes -1.
     int64_t value;
-    if (n == max_bytes && max_bytes < 8) {
+    if (n == max_bytes && max_bytes < 8 && !is_unsigned) {
         // sign-extend
         uint64_t sign_bit = 1ull << (n * 8 - 1);
         if (raw & sign_bit) raw |= ~((1ull << (n * 8)) - 1);
@@ -404,7 +430,7 @@ E2Cell DecodeDateTime(const uint8_t* p, size_t len, size_t* consumed) {
     if (prefix == kNullDateTime) { *consumed = 1; return E2Cell::MakeNull(); }
     if (prefix < 0x08) Fail("E2 DateTime: invalid prefix");
     if (prefix == 0x08) {
-        *consumed = 1; return E2Cell::MakeText(FormatDateTimePacked(0));
+        *consumed = 1; { E2Cell c = E2Cell::MakeText(FormatDateTimePacked(0)); c.integer = 0; return c; }
     }
     int n = prefix - 0x08;
     if (n < 1 || n > 6) Fail("E2 DateTime: invalid prefix");
@@ -413,7 +439,7 @@ E2Cell DecodeDateTime(const uint8_t* p, size_t len, size_t* consumed) {
     std::memcpy(buf, p + 1, n);
     uint64_t raw = LoadU64LE(buf);
     *consumed = 1 + n;
-    return E2Cell::MakeText(FormatDateTimePacked(raw));
+    { E2Cell c = E2Cell::MakeText(FormatDateTimePacked(raw)); c.integer = static_cast<int64_t>(raw & 0xFFFFFFull); return c; }
 }
 
 E2Cell DecodeTime(const uint8_t* p, size_t len, size_t* consumed) {
@@ -429,7 +455,7 @@ E2Cell DecodeTime(const uint8_t* p, size_t len, size_t* consumed) {
     std::memcpy(buf, p + 1, n);
     uint64_t centi = LoadU32LE(buf);
     *consumed = 1 + n;
-    return E2Cell::MakeText(FormatTimeCenti(centi));
+    { E2Cell c = E2Cell::MakeText(FormatTimeCenti(centi)); c.integer = static_cast<int64_t>(centi); return c; }
 }
 
 // FixedDecimal - packed BCD with explicit scale and sign per value.
@@ -621,6 +647,20 @@ public:
 
 }  // anonymous namespace
 
+// After the 0x00 end-of-data marker the file carries a trailer that ends in the
+// ASCII bytes "YXE2". Its inner layout is not interpreted, but a file that
+// stops before it was cut short.
+static void CheckTrailer(FileReader& f) {
+    const int64_t remaining = f.size - f.pos;
+    if (remaining < 4)
+        Fail("E2: file ends right after the end-of-data marker (missing trailer)");
+    f.Seek(f.size - 4);
+    uint8_t tail[4];
+    f.Read(tail, 4, "trailer");
+    if (std::memcmp(tail, "YXE2", 4) != 0)
+        Fail("E2: file does not end with the 'YXE2' trailer");
+}
+
 struct E2Reader::Impl {
     FileReader file;
     // Resolved blob payloads. Keyed by the file offset where the
@@ -696,7 +736,7 @@ size_t TryDecodeRecord(const std::vector<E2FieldMeta>& fields,
                 case E2FieldType::Bool:
                     DecodeBool(p + off, len - off, &c); break;
                 case E2FieldType::Byte:
-                    DecodeCompactInt(p + off, len - off, &c, 6, kNullByte, 1); break;
+                    DecodeCompactInt(p + off, len - off, &c, 6, kNullByte, 1, true); break;
                 case E2FieldType::Int16:
                     DecodeCompactInt(p + off, len - off, &c, 6, kNullInt16, 2); break;
                 case E2FieldType::Int32:
@@ -741,7 +781,7 @@ E2Cell DecodeOneField(const E2FieldMeta& f,
         case E2FieldType::Bool:
             return DecodeBool(p, len, consumed);
         case E2FieldType::Byte:
-            return DecodeCompactInt(p, len, consumed, 6, kNullByte, 1);
+            return DecodeCompactInt(p, len, consumed, 6, kNullByte, 1, true);
         case E2FieldType::Int16:
             return DecodeCompactInt(p, len, consumed, 6, kNullInt16, 2);
         case E2FieldType::Int32:
@@ -975,6 +1015,9 @@ void FrameRecords(const std::vector<uint8_t>& block, std::vector<Span>& out) {
         out.push_back({pos, sz});
         pos += sz;
     }
+    if (pos != block.size())
+        Fail("E2: " + std::to_string(block.size() - pos) +
+             " unread bytes after the last record of a block");
 }
 
 uint8_t DetectInt32Base(const std::vector<E2FieldMeta>& fields,
@@ -1023,11 +1066,16 @@ int64_t E2Reader::NumRecords() {
     std::vector<uint8_t> decompressed;
     std::vector<Span> spans;
 
+    bool saw_end = false;
     while (m_impl->file.pos < m_impl->file.size) {
         uint8_t type_byte;
         m_impl->file.Read(&type_byte, 1, "block type");
 
-        if (type_byte == 0x00) break;
+        if (type_byte == 0x00) {
+            CheckTrailer(m_impl->file);
+            saw_end = true;
+            break;
+        }
 
         if (type_byte == 0x01) {
             uint8_t size_buf[4];
@@ -1068,6 +1116,8 @@ int64_t E2Reader::NumRecords() {
             Fail("E2: record count overflow");
         total += static_cast<int64_t>(spans.size());
     }
+    if (!saw_end)
+        Fail("E2: file ends without an end-of-data marker (truncated?)");
     m_recordCount = total;
     return total;
 }
@@ -1095,12 +1145,17 @@ void E2Reader::ReadColumnsSubset(const std::vector<size_t>& projection,
     // Reused across records so the decode loop does not reallocate per record.
     std::vector<E2Cell> row;
 
+    bool saw_end = false;
     while (!reached_limit && m_impl->file.pos < m_impl->file.size) {
         uint8_t type_byte;
         m_impl->file.Read(&type_byte, 1, "block type");
         int64_t block_pos = m_impl->file.pos - 1;
 
-        if (type_byte == 0x00) break;  // end of stream
+        if (type_byte == 0x00) {  // end of stream
+            CheckTrailer(m_impl->file);
+            saw_end = true;
+            break;
+        }
 
         if (type_byte == 0x01) {
             // Blob block. We capture it for later 0x12/0x13 lookups by its
@@ -1248,6 +1303,12 @@ void E2Reader::ReadColumnsSubset(const std::vector<size_t>& projection,
             for (size_t pi = 0; pi < projection.size(); ++pi) {
                 size_t idx = projection[pi];
                 E2Cell& cell = row[idx];
+                if (cell.kind == E2Cell::Kind::Text) {
+                    if (m_schema[idx].type == E2FieldType::Time)
+                        CheckTimeOfDay(static_cast<uint64_t>(cell.integer), "Time");
+                    else if (m_schema[idx].type == E2FieldType::DateTime)
+                        CheckTimeOfDay(static_cast<uint64_t>(cell.integer), "DateTime");
+                }
                 if (cell.kind == E2Cell::Kind::Reference) {
                         uint8_t tag = cell.referenceTag;
                         const uint8_t* payload = cell.bytes.data();
@@ -1256,6 +1317,15 @@ void E2Reader::ReadColumnsSubset(const std::vector<size_t>& projection,
                             // string-style ref: u32 offset + u32 length into lastBlob
                             uint32_t boff = LoadU32LE(payload);
                             uint32_t blen = LoadU32LE(payload + 4);
+                            // The reference does not say which blob block it
+                            // points into; the most recent one is assumed. With
+                            // more than one block seen that assumption cannot
+                            // be checked, so refuse rather than guess.
+                            if (m_impl->blobBlocks.size() > 1)
+                                Fail("E2: inline blob reference in record " +
+                                     std::to_string(skipped + produced) +
+                                     " could point into any of " +
+                                     std::to_string(m_impl->blobBlocks.size()) + " blob blocks");
                             if (m_impl->lastBlob &&
                                 static_cast<size_t>(boff) + blen <= m_impl->lastBlob->size()) {
                                 const uint8_t* d = m_impl->lastBlob->data() + boff;
@@ -1290,6 +1360,8 @@ void E2Reader::ReadColumnsSubset(const std::vector<size_t>& projection,
             ++produced;
         }
     }
+    if (!saw_end && !reached_limit)
+        Fail("E2: file ends without an end-of-data marker (truncated?)");
     // A limited read stops early, so it does not establish the file's total.
     if (limit < 0) m_recordCount = produced + skipped;
 }

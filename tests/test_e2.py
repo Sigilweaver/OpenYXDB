@@ -96,7 +96,7 @@ def test_num_records_matches_decoded_rows(path: Path) -> None:
         declared = r.num_records
         expected_error = KNOWN_UNSUPPORTED.get(_digest(path))
         if expected_error:
-            with pytest.raises(RuntimeError, match=expected_error):
+            with pytest.raises(openyxdb.FormatError, match=expected_error):
                 r.read_columns()
             return
         columns = r.read_columns()
@@ -125,7 +125,7 @@ def test_amazon_int32_prices_use_the_valid_exact_interpretation() -> None:
     if path is None:
         pytest.skip("reviewed Amazon fixture not present")
     with Reader(str(path)) as reader:
-        with pytest.raises(RuntimeError, match=r"ambiguous Int32 encoding in record 32$"):
+        with pytest.raises(openyxdb.FormatError, match=r"ambiguous Int32 encoding in record 32$"):
             reader.read_columns_subset(
                 ["product_id", "discounted_price", "actual_price"], 32, 1
             )
