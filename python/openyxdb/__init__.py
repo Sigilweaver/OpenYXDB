@@ -165,9 +165,15 @@ def _arrow_type_to_yxdb(name: str, dtype) -> FieldInfo:
 # --------------------------------------------------------------------------- #
 
 
-def read_yxdb(path: str | os.PathLike) -> dict[str, list[Any]]:
-    """Read a YXDB file and return columnar data as a dict of lists."""
-    with Reader(str(path)) as r:
+def read_yxdb(
+    path: str | os.PathLike, *, narrow_encoding: str = "utf-8"
+) -> dict[str, list[Any]]:
+    """Read a YXDB file and return columnar data as a dict of lists.
+
+    ``narrow_encoding`` is the codec for String and V_String values; see
+    :class:`Reader`.
+    """
+    with Reader(str(path), narrow_encoding=narrow_encoding) as r:
         return dict(r.read_columns())
 
 
@@ -175,6 +181,8 @@ def write_yxdb(
     path: str | os.PathLike,
     columns: dict[str, list[Any]],
     schema: list[FieldInfo] | None = None,
+    *,
+    narrow_encoding: str = "utf-8",
 ) -> None:
     """Write columnar data to a YXDB file.
 
@@ -182,7 +190,7 @@ def write_yxdb(
     """
     if schema is None:
         schema = _infer_schema(columns)
-    with Writer(str(path), schema) as w:
+    with Writer(str(path), schema, narrow_encoding=narrow_encoding) as w:
         w.write_columns(columns)
 
 
@@ -273,7 +281,7 @@ def _column_to_arrow(fi: FieldInfo, col_data: list, pa):
     return pa.array(col_data, type=arrow_type)
 
 
-def to_pyarrow(path: str | os.PathLike):
+def to_pyarrow(path: str | os.PathLike, *, narrow_encoding: str = "utf-8"):
     """Read a YXDB file and return a PyArrow Table.
 
     The whole file is decoded to Python objects up front, so peak memory
@@ -283,7 +291,7 @@ def to_pyarrow(path: str | os.PathLike):
     """
     import pyarrow as pa
 
-    with Reader(str(path)) as r:
+    with Reader(str(path), narrow_encoding=narrow_encoding) as r:
         schema_info = r.schema
         columns = r.read_columns()
 
@@ -385,6 +393,8 @@ def from_pyarrow(
     table,
     path: str | os.PathLike,
     chunk_size: int | None = None,
+    *,
+    narrow_encoding: str = "utf-8",
 ) -> None:
     """Write a PyArrow Table to a YXDB file.
 
@@ -395,7 +405,7 @@ def from_pyarrow(
     if chunk_size is None:
         chunk_size = DEFAULT_WRITE_CHUNK_SIZE
     schema = _arrow_schema_to_yxdb(table.schema, table)
-    with Writer(str(path), schema) as w:
+    with Writer(str(path), schema, narrow_encoding=narrow_encoding) as w:
         if chunk_size > 0:
             for batch in table.to_batches(max_chunksize=chunk_size):
                 w.write_columns(_arrow_batch_to_columns(batch, schema))
@@ -408,15 +418,17 @@ def from_pyarrow(
 # --------------------------------------------------------------------------- #
 
 
-def to_pandas(path: str | os.PathLike):
+def to_pandas(path: str | os.PathLike, *, narrow_encoding: str = "utf-8"):
     """Read a YXDB file and return a Pandas DataFrame."""
     import pandas as pd
 
-    table = to_pyarrow(path)
+    table = to_pyarrow(path, narrow_encoding=narrow_encoding)
     return table.to_pandas()
 
 
-def from_pandas(df, path: str | os.PathLike, chunk_size: int | None = None) -> None:
+def from_pandas(
+    df, path: str | os.PathLike, chunk_size: int | None = None, *, narrow_encoding: str = "utf-8"
+) -> None:
     """Write a Pandas DataFrame to a YXDB file.
 
     Rows are written in batches of ``chunk_size``, defaulting to
@@ -425,7 +437,7 @@ def from_pandas(df, path: str | os.PathLike, chunk_size: int | None = None) -> N
     import pyarrow as pa
 
     table = pa.Table.from_pandas(df)
-    from_pyarrow(table, path, chunk_size=chunk_size)
+    from_pyarrow(table, path, chunk_size=chunk_size, narrow_encoding=narrow_encoding)
 
 
 # --------------------------------------------------------------------------- #
@@ -496,15 +508,15 @@ def _yxdb_columns_to_polars(
     return pl.DataFrame(series)
 
 
-def to_polars(path: str | os.PathLike):
+def to_polars(path: str | os.PathLike, *, narrow_encoding: str = "utf-8"):
     """Read a YXDB file and return a Polars DataFrame."""
     import polars as pl
 
-    table = to_pyarrow(path)
+    table = to_pyarrow(path, narrow_encoding=narrow_encoding)
     return pl.from_arrow(table)
 
 
-def scan_yxdb(path: str | os.PathLike) -> "pl.LazyFrame":
+def scan_yxdb(path: str | os.PathLike, *, narrow_encoding: str = "utf-8") -> "pl.LazyFrame":
     """Scan a YXDB file as a Polars LazyFrame (IO plugin).
 
     Supports:
@@ -534,7 +546,7 @@ def scan_yxdb(path: str | os.PathLike) -> "pl.LazyFrame":
 
     path_str = str(path)
 
-    with Reader(path_str) as r:
+    with Reader(path_str, narrow_encoding=narrow_encoding) as r:
         schema_info = list(r.schema)
         total_rows = r.num_records
 
@@ -569,7 +581,7 @@ def scan_yxdb(path: str | os.PathLike) -> "pl.LazyFrame":
 
         offset = 0
         # Open the reader once for the duration of the scan.
-        with Reader(path_str) as r:
+        with Reader(path_str, narrow_encoding=narrow_encoding) as r:
             while remaining > 0:
                 take = min(chunk, remaining)
                 cols = r.read_columns_subset(proj_names, offset, take)
@@ -591,14 +603,16 @@ def scan_yxdb(path: str | os.PathLike) -> "pl.LazyFrame":
     return register_io_source(io_source=_source, schema=pl_schema)
 
 
-def from_polars(df, path: str | os.PathLike, chunk_size: int | None = None) -> None:
+def from_polars(
+    df, path: str | os.PathLike, chunk_size: int | None = None, *, narrow_encoding: str = "utf-8"
+) -> None:
     """Write a Polars DataFrame to a YXDB file.
 
     The DataFrame is written to the underlying YXDB writer in batches of
     ``chunk_size`` rows, defaulting to :data:`DEFAULT_WRITE_CHUNK_SIZE`.
     """
     table = df.to_arrow()
-    from_pyarrow(table, path, chunk_size=chunk_size)
+    from_pyarrow(table, path, chunk_size=chunk_size, narrow_encoding=narrow_encoding)
 
 
 def sink_yxdb(
@@ -607,6 +621,7 @@ def sink_yxdb(
     *,
     chunk_size: int = DEFAULT_WRITE_CHUNK_SIZE,
     engine: str = "streaming",
+    narrow_encoding: str = "utf-8",
 ) -> None:
     """Execute a Polars LazyFrame and stream the result to a YXDB file.
 
@@ -626,7 +641,7 @@ def sink_yxdb(
     import polars as pl
 
     if isinstance(lf, pl.DataFrame):
-        from_polars(lf, path, chunk_size=chunk_size)
+        from_polars(lf, path, chunk_size=chunk_size, narrow_encoding=narrow_encoding)
         return
 
     import inspect
@@ -641,7 +656,7 @@ def sink_yxdb(
 
     arrow_table = df.to_arrow()
     schema = _arrow_schema_to_yxdb(arrow_table.schema, arrow_table)
-    with Writer(str(path), schema) as w:
+    with Writer(str(path), schema, narrow_encoding=narrow_encoding) as w:
         if arrow_table.num_rows == 0:
             return
         for batch in arrow_table.to_batches(max_chunksize=chunk_size):
@@ -657,6 +672,8 @@ def to_duckdb(
     path: str | os.PathLike,
     con=None,
     table_name: str | None = None,
+    *,
+    narrow_encoding: str = "utf-8",
 ):
     """Load a YXDB file into DuckDB and return a DuckDB relation.
 
@@ -676,7 +693,7 @@ def to_duckdb(
     if con is None:
         con = duckdb.connect()
 
-    table = to_pyarrow(path)
+    table = to_pyarrow(path, narrow_encoding=narrow_encoding)
     if table_name is not None:
         con.register(table_name, table)
         return con.table(table_name)
@@ -688,6 +705,8 @@ def from_duckdb(
     path: str | os.PathLike,
     con=None,
     chunk_size: int | None = None,
+    *,
+    narrow_encoding: str = "utf-8",
 ) -> None:
     """Write a DuckDB query or relation to a YXDB file.
 
@@ -717,16 +736,18 @@ def from_duckdb(
         table = arrow_obj.read_all()
     else:
         table = arrow_obj
-    from_pyarrow(table, path, chunk_size=chunk_size)
+    from_pyarrow(table, path, chunk_size=chunk_size, narrow_encoding=narrow_encoding)
 
 
-def register_duckdb(con, name: str, path: str | os.PathLike) -> None:
+def register_duckdb(
+    con, name: str, path: str | os.PathLike, *, narrow_encoding: str = "utf-8"
+) -> None:
     """Register a YXDB file as a named view on a DuckDB connection.
 
     The file is read eagerly into an Arrow table and registered; subsequent
     queries against ``name`` do not re-read the file.
     """
-    table = to_pyarrow(path)
+    table = to_pyarrow(path, narrow_encoding=narrow_encoding)
     con.register(name, table)
 
 
