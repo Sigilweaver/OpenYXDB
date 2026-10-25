@@ -338,7 +338,7 @@ static nb::object e2_cell_to_python(const Alteryx::OpenYXDB::e2::E2Cell& c,
     using FT = Alteryx::OpenYXDB::e2::E2FieldType;
     if (c.kind == K::Null) return nb::none();
     if (c.kind == K::Reference)
-        throw std::runtime_error("E2: unresolved reference reached Python conversion");
+        raise_error(ErrorKind::Format, "E2: unresolved reference reached Python conversion");
     switch (ft) {
         case FT::Bool:
             if (c.kind == K::Bool) return nb::cast(c.boolean);
@@ -1187,6 +1187,10 @@ NB_MODULE(_openyxdb, m) {
     nb::register_exception_translator([](const std::exception_ptr& p, void*) {
         try {
             std::rethrow_exception(p);
+        } catch (const Alteryx::OpenYXDB::e2::E2FormatError& e) {
+            PyErr_SetString(ex_format.ptr(), e.what());
+        } catch (const Alteryx::OpenYXDB::e2::SnappyError& e) {
+            PyErr_SetString(ex_format.ptr(), e.what());
         } catch (const SRC::Error& e) {
             std::string msg = wstring_to_utf8(e.GetErrorDescription(), false);
             PyObject* cls = ex_base.ptr();

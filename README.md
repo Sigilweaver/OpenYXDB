@@ -194,6 +194,9 @@ Known limits:
 - Spatial indexes are skipped on read and not created on write.
 - Spatial objects are accessible only as raw blobs (SHP-encoded binary).
 - Little-endian architectures only (x86, ARM).
+- E2 files: the first four bytes of each block, the high bit of record sizes and the
+  bytes between the end-of-data marker and the `YXE2` trailer are not interpreted (their
+  meaning is not documented), so they are not validated.
 
 ## Testing
 
