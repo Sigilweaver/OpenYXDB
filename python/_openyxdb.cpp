@@ -727,13 +727,50 @@ private:
 NB_MODULE(_openyxdb, m) {
     m.doc() = "Low-level Python bindings for OpenYXDB";
 
-    // Register the C++ Error exception so it translates to Python RuntimeError
+    // Exception hierarchy. Callers should catch OpenYXDBError (a ValueError);
+    // the subclasses are an open set that may grow.
+    static nb::object ex_base = nb::steal(PyErr_NewExceptionWithDoc(
+        "openyxdb.OpenYXDBError",
+        "Base class for errors raised by openyxdb.", PyExc_ValueError, nullptr));
+    nb::object io_bases = nb::make_tuple(ex_base, nb::borrow(PyExc_OSError));
+    static nb::object ex_io = nb::steal(PyErr_NewExceptionWithDoc(
+        "openyxdb.OpenYXDBIOError",
+        "The file could not be read or written.", io_bases.ptr(), nullptr));
+    static nb::object ex_format = nb::steal(PyErr_NewExceptionWithDoc(
+        "openyxdb.FormatError",
+        "The file does not match the YXDB format.", ex_base.ptr(), nullptr));
+    static nb::object ex_schema = nb::steal(PyErr_NewExceptionWithDoc(
+        "openyxdb.SchemaError",
+        "Field types, names or columns are not usable.", ex_base.ptr(), nullptr));
+    static nb::object ex_conv = nb::steal(PyErr_NewExceptionWithDoc(
+        "openyxdb.ConversionError",
+        "A value does not fit its field.", ex_base.ptr(), nullptr));
+    static nb::object ex_unsupported = nb::steal(PyErr_NewExceptionWithDoc(
+        "openyxdb.UnsupportedError",
+        "Valid input that openyxdb does not handle.", ex_base.ptr(), nullptr));
+    m.attr("OpenYXDBError") = ex_base;
+    m.attr("OpenYXDBIOError") = ex_io;
+    m.attr("FormatError") = ex_format;
+    m.attr("SchemaError") = ex_schema;
+    m.attr("ConversionError") = ex_conv;
+    m.attr("UnsupportedError") = ex_unsupported;
+
+    // Translate the C++ Error, and the writer's typed errors, to those classes.
     nb::register_exception_translator([](const std::exception_ptr& p, void*) {
         try {
             std::rethrow_exception(p);
         } catch (const SRC::Error& e) {
             std::string msg = wstring_to_utf8(e.GetErrorDescription());
-            PyErr_SetString(PyExc_RuntimeError, msg.c_str());
+            PyObject* cls = ex_base.ptr();
+            switch (e.GetKind()) {
+                case ErrorKind::IO: cls = ex_io.ptr(); break;
+                case ErrorKind::Format: cls = ex_format.ptr(); break;
+                case ErrorKind::Schema: cls = ex_schema.ptr(); break;
+                case ErrorKind::Conversion: cls = ex_conv.ptr(); break;
+                case ErrorKind::Unsupported: cls = ex_unsupported.ptr(); break;
+                default: break;
+            }
+            PyErr_SetString(cls, msg.c_str());
         }
     });
 

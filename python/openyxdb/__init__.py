@@ -11,9 +11,25 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
-from openyxdb._openyxdb import FieldInfo, Reader, Writer
+from openyxdb._openyxdb import (
+    ConversionError,
+    FieldInfo,
+    FormatError,
+    OpenYXDBError,
+    OpenYXDBIOError,
+    Reader,
+    SchemaError,
+    UnsupportedError,
+    Writer,
+)
 
 __all__ = [
+    "ConversionError",
+    "FormatError",
+    "OpenYXDBError",
+    "OpenYXDBIOError",
+    "SchemaError",
+    "UnsupportedError",
     "DEFAULT_WRITE_CHUNK_SIZE",
     "FieldInfo",
     "Reader",

@@ -6,6 +6,21 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added
+
+- Exception hierarchy: `OpenYXDBError` (a `ValueError`) with subclasses
+  `OpenYXDBIOError` (also an `OSError`), `FormatError`, `SchemaError`,
+  `ConversionError` and `UnsupportedError`. The set of subclasses may grow, so
+  catch `OpenYXDBError`.
+- `SRC::Error` carries an `ErrorKind` (`GetKind()`) that the Python bindings
+  map to those classes.
+
+### Behavior changes
+
+- Errors raised from C++ are now `OpenYXDBError` subclasses instead of
+  `RuntimeError`. Code that catches `RuntimeError` for file and schema errors
+  must catch `OpenYXDBError` (or `OSError` for I/O errors).
+
 ## [1.5.0] - 2026-09-19
 
 ### Fixed
