@@ -14,6 +14,9 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   catch `OpenYXDBError`.
 - `SRC::Error` carries an `ErrorKind` (`GetKind()`) that the Python bindings
   map to those classes.
+- A missing or unreadable file raises `OpenYXDBFileNotFoundError` or
+  `OpenYXDBPermissionError`, which are also `FileNotFoundError` and
+  `PermissionError`, with `errno` and `filename` set.
 
 ### Behavior changes
 

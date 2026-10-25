@@ -6,6 +6,7 @@
 #include <nanobind/stl/optional.h>
 
 #include <algorithm>
+#include <cerrno>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -748,6 +749,18 @@ NB_MODULE(_openyxdb, m) {
     static nb::object ex_unsupported = nb::steal(PyErr_NewExceptionWithDoc(
         "openyxdb.UnsupportedError",
         "Valid input that openyxdb does not handle.", ex_base.ptr(), nullptr));
+    // I/O errors that match a builtin OSError subclass also derive from it, so
+    // `except FileNotFoundError` and `except PermissionError` work.
+    nb::object nf_bases = nb::make_tuple(ex_io, nb::borrow(PyExc_FileNotFoundError));
+    static nb::object ex_notfound = nb::steal(PyErr_NewExceptionWithDoc(
+        "openyxdb.OpenYXDBFileNotFoundError", "The file does not exist.",
+        nf_bases.ptr(), nullptr));
+    nb::object perm_bases = nb::make_tuple(ex_io, nb::borrow(PyExc_PermissionError));
+    static nb::object ex_perm = nb::steal(PyErr_NewExceptionWithDoc(
+        "openyxdb.OpenYXDBPermissionError", "The file cannot be accessed.",
+        perm_bases.ptr(), nullptr));
+    m.attr("OpenYXDBFileNotFoundError") = ex_notfound;
+    m.attr("OpenYXDBPermissionError") = ex_perm;
     m.attr("OpenYXDBError") = ex_base;
     m.attr("OpenYXDBIOError") = ex_io;
     m.attr("FormatError") = ex_format;
@@ -769,6 +782,27 @@ NB_MODULE(_openyxdb, m) {
                 case ErrorKind::Conversion: cls = ex_conv.ptr(); break;
                 case ErrorKind::Unsupported: cls = ex_unsupported.ptr(); break;
                 default: break;
+            }
+            if (e.GetKind() == ErrorKind::IO && e.GetOsError() != 0) {
+                int en = e.GetOsError();
+                if (en == ENOENT) cls = ex_notfound.ptr();
+                else if (en == EACCES || en == EPERM) cls = ex_perm.ptr();
+                std::string file = wstring_to_utf8(e.GetFile());
+                PyObject* exc = PyObject_CallFunction(cls, "isO", en, msg.c_str(),
+                    file.empty() ? Py_None : nb::str(file.c_str()).ptr());
+                if (exc) {
+                    // Which Python versions fill in errno and filename for a class
+                    // with a non-OSError base first in its MRO differs, so set them
+                    // explicitly.
+                    nb::object o = nb::borrow(exc);
+                    o.attr("errno") = nb::int_(en);
+                    o.attr("strerror") = nb::str(msg.c_str());
+                    o.attr("filename") = file.empty() ? nb::none() : nb::object(nb::str(file.c_str()));
+                    PyErr_SetObject(cls, exc);
+                    Py_DECREF(exc);
+                    return;
+                }
+                PyErr_Clear();
             }
             PyErr_SetString(cls, msg.c_str());
         }

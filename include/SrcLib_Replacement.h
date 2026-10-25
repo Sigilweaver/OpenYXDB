@@ -637,6 +637,8 @@ class Error
 {
 	String m_strError;
 	ErrorKind m_kind = ErrorKind::Generic;
+	int m_nOsError = 0;  // errno of an IO error, or 0
+	String m_strFile;    // the file an IO error is about, or empty
 
 public:
 	inline Error(ErrorKind kind, const AString& str)
@@ -652,6 +654,21 @@ public:
 	ErrorKind GetKind() const
 	{
 		return m_kind;
+	}
+	// For ErrorKind::IO: the OS error number and the file it happened on.
+	Error& SetOsError(int nErrno, const String& strFile)
+	{
+		m_nOsError = nErrno;
+		m_strFile = strFile;
+		return *this;
+	}
+	int GetOsError() const
+	{
+		return m_nOsError;
+	}
+	const String& GetFile() const
+	{
+		return m_strFile;
 	}
 
 	inline Error(const String& str)
