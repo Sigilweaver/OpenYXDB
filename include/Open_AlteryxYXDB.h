@@ -39,6 +39,10 @@ public:
 	File_Large();
 	~File_Large();
 	void Close();
+	// Flush to stable storage; throws on a deferred write error.
+	void Sync();
+	// Close, throwing if close() itself fails.
+	void CloseChecked();
 
 	void OpenForRead(WString strFile);
 	void OpenForWrite(WString strFile);

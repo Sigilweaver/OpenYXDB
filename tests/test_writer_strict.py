@@ -293,3 +293,119 @@ def test_unfinished_writer_leaves_no_valid_file(tmp_path):
     w.close()
     assert out.exists()
     assert os.listdir(tmp_path) == ["x.yxdb"]
+
+
+# -- value type errors name the column and row -------------------------------- #
+
+
+@pytest.mark.parametrize(
+    "type_,size,value",
+    [
+        ("Int32", 4, 2**31),
+        ("Int64", 8, 2**64),
+        ("Int32", 4, 1.5),
+        ("Int32", 4, [1]),
+        ("Double", 8, "abc"),
+        ("Bool", 1, "yes"),
+        ("V_WString", 5, 7),
+    ],
+)
+def test_wrong_value_type_is_a_conversion_error_with_location(p, type_, size, value):
+    with pytest.raises(openyxdb.ConversionError, match=r"column 'v', row 1: .* cannot be stored") as e:
+        write_rows(p, [fi("v", type_, size)], [{"v": None}, {"v": value}])
+    assert not isinstance(e.value, RuntimeError)
+    assert not p.exists()
+
+
+def test_row_index_continues_across_batches(p):
+    with Writer(str(p), [fi("v", "Int32", 4)]) as w:
+        w.write_columns({"v": [1, 2]})
+        with pytest.raises(openyxdb.ConversionError, match="row 3"):
+            w.write_columns({"v": [3, "x"]})
+        w.abort()
+
+
+# -- finalization --------------------------------------------------------------- #
+
+
+def test_dropped_writer_discards_output_and_warns(tmp_path):
+    import gc
+
+    out = tmp_path / "x.yxdb"
+    w = Writer(str(out), [fi("a", "Int32", 4)])
+    w.write_record({"a": 1})
+    with pytest.warns(ResourceWarning, match="was not closed"):
+        del w
+        gc.collect()
+    assert os.listdir(tmp_path) == []
+
+
+def test_failed_write_then_drop_does_not_publish(tmp_path):
+    import gc
+
+    out = tmp_path / "x.yxdb"
+    w = Writer(str(out), [fi("a", "Int32", 4)])
+    w.write_record({"a": 1})
+    with pytest.raises(openyxdb.ConversionError):
+        w.write_record({"a": "bad"})
+    with pytest.warns(ResourceWarning):
+        del w
+        gc.collect()
+    assert not out.exists()
+
+
+def test_use_after_close_raises(tmp_path):
+    w = Writer(str(tmp_path / "x.yxdb"), [fi("a", "Int32", 4)])
+    w.close()
+    with pytest.raises(openyxdb.OpenYXDBError, match="closed"):
+        w.write_record({"a": 1})
+    with pytest.raises(openyxdb.OpenYXDBError, match="closed"):
+        w.write_columns({"a": [1]})
+    w.close()  # closing twice is fine
+
+
+@pytest.mark.parametrize(
+    "schema",
+    [
+        [],
+        [fi("s", "String", 0)],
+        [fi("d", "FixedDecimal", 2, 3)],
+    ],
+    ids=["empty", "zero-length-string", "scale-larger-than-size"],
+)
+def test_bad_schema_raises_before_creating_any_file(tmp_path, schema):
+    out = tmp_path / "x.yxdb"
+    with pytest.raises(openyxdb.SchemaError):
+        Writer(str(out), schema)
+    assert os.listdir(tmp_path) == []
+
+
+def test_cannot_move_into_place_is_an_io_error_and_cleans_up(tmp_path):
+    target = tmp_path / "dir"
+    target.mkdir()
+    w = Writer(str(target), [fi("a", "Int32", 4)])
+    w.write_record({"a": 1})
+    with pytest.raises(openyxdb.OpenYXDBIOError, match="move the finished file"):
+        w.close()
+    assert os.listdir(tmp_path) == ["dir"]
+
+
+def test_concurrent_writers_to_one_path_use_separate_partial_files(tmp_path):
+    out = tmp_path / "x.yxdb"
+    a = Writer(str(out), [fi("a", "Int32", 4)])
+    b = Writer(str(out), [fi("a", "Int32", 4)])
+    assert len(os.listdir(tmp_path)) == 2
+    a.abort()
+    b.abort()
+    assert os.listdir(tmp_path) == []
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX permissions")
+def test_output_respects_the_umask(tmp_path):
+    old = os.umask(0o022)
+    try:
+        out = tmp_path / "x.yxdb"
+        write_rows(out, [fi("a", "Int32", 4)], [{"a": 1}])
+    finally:
+        os.umask(old)
+    assert (out.stat().st_mode & 0o777) == 0o644

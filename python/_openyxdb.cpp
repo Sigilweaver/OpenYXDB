@@ -12,6 +12,13 @@
 #include <cstdio>
 #include <filesystem>
 #include <system_error>
+#include <atomic>
+#include <typeinfo>
+#ifdef _WIN32
+#include <process.h>
+#else
+#include <unistd.h>
+#endif
 #include <unordered_map>
 #include <unordered_set>
 
@@ -629,7 +636,24 @@ class YXDBWriter {
     // that reads as a complete file.
     std::string m_finalPath;
     std::string m_tmpPath;
+    int64_t m_rowsWritten = 0;
     bool m_open = false;
+
+    // <path>.<pid>-<n>.partial: unique per writer, so two writers aimed at one
+    // path never share a temporary file.
+    static std::string partial_name(const std::string& path) {
+        static std::atomic<unsigned> counter{0};
+#ifdef _WIN32
+        unsigned long pid = static_cast<unsigned long>(_getpid());
+#else
+        unsigned long pid = static_cast<unsigned long>(getpid());
+#endif
+        return path + "." + std::to_string(pid) + "-" + std::to_string(counter++) + ".partial";
+    }
+
+    void require_open() const {
+        if (!m_open) raise_error(ErrorKind::Generic, "I/O operation on closed Writer");
+    }
 
     static void build_schema_xml(const std::vector<FieldInfo>& schema, WString& xml) {
         std::string s = "<RecordInfo>";
@@ -657,25 +681,53 @@ class YXDBWriter {
         xml = utf8_to_wstring(s);
     }
 
+    // Remove the temporary file. A failure to remove it is reported as a
+    // warning: the caller is usually already unwinding and cannot take another
+    // exception.
     void discard_partial_file() noexcept {
         std::error_code ec;
         std::filesystem::remove(std::filesystem::u8path(m_tmpPath), ec);
+        if (ec) {
+            PyErr_WarnFormat(PyExc_RuntimeWarning, 1, "could not remove partial file '%s': %s",
+                             m_tmpPath.c_str(), ec.message().c_str());
+            if (PyErr_Occurred()) PyErr_WriteUnraisable(nullptr);
+        }
     }
 
 public:
     YXDBWriter(const std::string& path, const std::vector<FieldInfo>& schema)
-        : m_finalPath(path), m_tmpPath(path + ".partial") {
+        : m_finalPath(path), m_tmpPath(partial_name(path)) {
+        if (schema.empty())
+            raise_error(ErrorKind::Schema, "a Writer needs at least one field");
         WString xml;
         build_schema_xml(schema, xml);
-        m_db.Create(utf8_to_wstring(m_tmpPath), xml.c_str());
-        m_open = true;
+
+        // Check the whole schema before anything is created on disk: sizes,
+        // scales and record size limits, and that no name would be renamed.
+        {
+            RecordInfo probe;
+            probe.InitFromXml(xml.c_str());
+            if (probe.NumFields() != schema.size())
+                raise_error(ErrorKind::Schema,
+                    "schema has " + std::to_string(schema.size()) + " fields but "
+                    + std::to_string(probe.NumFields()) + " were created");
+            for (unsigned i = 0; i < probe.NumFields(); ++i) {
+                std::string stored = wstring_to_utf8(WString(probe[i]->GetFieldName().c_str()));
+                // The writer matches input columns to fields by name, so the
+                // library must not have renamed, truncated or de-duplicated it.
+                if (stored != schema[i].name)
+                    raise_error(ErrorKind::Schema,
+                        "field name '" + schema[i].name + "' is not usable as written (it would be stored as '"
+                        + stored + "'): names must be unique ignoring case, non-empty, and at most "
+                        "255 characters");
+            }
+        }
 
         try {
+            m_db.Create(utf8_to_wstring(m_tmpPath), xml.c_str());
+            m_open = true;
+
             unsigned nFields = m_db.m_recordInfo.NumFields();
-            if (nFields != schema.size())
-                raise_error(ErrorKind::Schema, 
-                    "schema has " + std::to_string(schema.size()) + " fields but "
-                    + std::to_string(nFields) + " were created");
             m_fields.reserve(nFields);
             m_fieldNames.reserve(nFields);
             m_fieldKeys.reserve(nFields);
@@ -683,13 +735,6 @@ public:
                 const FieldBase* f = m_db.m_recordInfo[i];
                 m_fields.push_back(f);
                 m_fieldNames.push_back(wstring_to_utf8(WString(f->GetFieldName().c_str())));
-                // The writer matches input columns to fields by name, so the
-                // library must not have renamed, truncated or de-duplicated it.
-                if (m_fieldNames.back() != schema[i].name)
-                    raise_error(ErrorKind::Schema, 
-                        "field name '" + schema[i].name + "' is not usable as written (it would be stored as '"
-                        + m_fieldNames.back() + "'): names must be unique ignoring case, non-empty, and at most "
-                        "255 characters");
                 m_fieldNameSet.insert(m_fieldNames.back());
                 m_fieldKeys.emplace_back(m_fieldNames.back().c_str(),
                                          m_fieldNames.back().size());
@@ -700,21 +745,27 @@ public:
             // info, stays single-threaded.
             m_db.m_recordInfo.SetGenericEngine(&m_engine);
         } catch (...) {
-            m_db.Close();
+            try {
+                m_db.Close();
+            } catch (...) {
+                // The partial file is removed next; the original error is the
+                // one worth reporting.
+            }
             m_open = false;
             discard_partial_file();
             throw;
         }
     }
 
+    // A writer that is dropped without close() never publishes its output: the
+    // data may be incomplete, and nothing says the caller meant to finish.
     ~YXDBWriter() {
-        try {
-            close();
-        } catch (const std::exception& e) {
-            // A destructor cannot throw; surface the failure as a warning.
-            PyErr_WarnFormat(PyExc_RuntimeWarning, 1,
-                             "Writer for '%s' failed to finalize: %s", m_finalPath.c_str(), e.what());
-            if (PyErr_Occurred()) PyErr_Clear();
+        if (m_open) {
+            abort();
+            PyErr_WarnFormat(PyExc_ResourceWarning, 1,
+                             "Writer for '%s' was not closed; its output was discarded",
+                             m_finalPath.c_str());
+            if (PyErr_Occurred()) PyErr_WriteUnraisable(nullptr);
         }
     }
 
@@ -722,9 +773,19 @@ public:
     void close() {
         if (!m_open) return;
         m_open = false;
-        m_db.Close();
-        std::filesystem::rename(std::filesystem::u8path(m_tmpPath),
-                                std::filesystem::u8path(m_finalPath));
+        try {
+            // Flushes, fsyncs and closes, throwing if the system reports a
+            // deferred write error.
+            m_db.Close();
+            std::filesystem::rename(std::filesystem::u8path(m_tmpPath),
+                                    std::filesystem::u8path(m_finalPath));
+        } catch (const std::filesystem::filesystem_error& e) {
+            discard_partial_file();
+            raise_error(ErrorKind::IO, std::string("could not move the finished file into place: ") + e.what());
+        } catch (...) {
+            discard_partial_file();
+            throw;
+        }
     }
 
     // Close without finalizing and remove the partial output. Used when the
@@ -742,6 +803,7 @@ public:
     }
 
     void write_record(const nb::dict& row) {
+        require_open();
         Record* rec = m_record.Get();
         rec->Reset();
         size_t matched = 0;
@@ -758,13 +820,15 @@ public:
                 field->SetNull(rec);
                 continue;
             }
-            set_field_from_python(field, rec, val);
+            store(field, rec, val, m_rowsWritten);
         }
         if (matched != nb::len(row)) reject_unknown_keys(row);
         m_db.AppendRecord(rec->GetRecord());
+        ++m_rowsWritten;
     }
 
     void write_columns(const nb::dict& columns) {
+        require_open();
         if (m_fields.empty()) return;
         size_t nFields = m_fields.size();
 
@@ -812,16 +876,48 @@ public:
                     field->SetNull(rec);
                     continue;
                 }
-                set_field_from_python(field, rec, val);
+                store(field, rec, val, m_rowsWritten + static_cast<int64_t>(row));
             }
             m_db.AppendRecord(rec->GetRecord());
         }
+        m_rowsWritten += static_cast<int64_t>(n);
     }
 
     // Context manager support
     YXDBWriter& enter() { return *this; }
 
 private:
+    // Store one value, turning every failure into an OpenYXDBError that names
+    // the column and the row.
+    void store(const FieldBase* field, Record* rec, nb::handle val, int64_t row) {
+        auto where = [&]() {
+            return "column '" + wstring_to_utf8(WString(field->GetFieldName().c_str()), false)
+                   + "', row " + std::to_string(row);
+        };
+        auto cannot_store = [&]() {
+            std::string r;
+            try {
+                r = nb::cast<std::string>(nb::repr(val));
+            } catch (...) {
+                r = "?";
+            }
+            if (r.size() > 60) r = r.substr(0, 57) + "...";
+            raise_error(ErrorKind::Conversion,
+                        where() + ": a " + std::string(Py_TYPE(val.ptr())->tp_name) + " value " + r
+                            + " cannot be stored in a " + field_type_name(field->m_ft) + " field");
+        };
+        try {
+            set_field_from_python(field, rec, val);
+        } catch (const nb::cast_error&) {  // also std::bad_cast
+            cannot_store();
+        } catch (const nb::builtin_exception&) {
+            cannot_store();
+        } catch (const SRC::Error& e) {
+            throw SRC::Error(e.GetKind(),
+                             utf8_to_wstring(where() + ": ") + e.GetErrorDescription());
+        }
+    }
+
     // Every key supplied by the caller must name a schema field; a typo would
     // otherwise silently write that column as all NULL.
     void reject_unknown_keys(const nb::dict& d) const {

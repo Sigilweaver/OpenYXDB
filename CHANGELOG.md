@@ -59,12 +59,23 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - Writer: a field name the library would rename (case-insensitive duplicate,
   empty, longer than 255 characters) raises `SchemaError`, as does a column
   key in `write_record` or `write_columns` that is not a field in the schema.
-- Writer: output is written to `<path>.partial` and moved to `<path>` on
-  `close()`. A process that stops early leaves no file at `<path>` that reads as
-  complete, and an exception inside a `with Writer(...)` block discards the
-  output and leaves any existing file at `<path>` untouched. `Writer.abort()`
-  discards the output explicitly. A `Writer` that fails to finalize while being
-  garbage collected emits a `RuntimeWarning`.
+- Writer: output is written to a temporary `<path>.<pid>-<n>.partial` file,
+  synced to disk, and moved to `<path>` only by `close()`. A process that
+  stops early leaves no file at `<path>` that reads as complete; an exception
+  inside a `with Writer(...)` block discards the output and leaves any
+  existing file at `<path>` untouched; a `Writer` that is dropped without
+  `close()` discards its output and issues a `ResourceWarning`. A failure to
+  sync, close or move the file raises `OpenYXDBIOError`. `Writer.abort()`
+  discards the output explicitly. A schema that cannot be written (empty, a
+  zero-length string, a scale larger than the size) raises `SchemaError`
+  before any file is created.
+- Writer: a value of the wrong type (a string for a number, an integer too
+  large for the field, a list) raises `ConversionError` naming the column,
+  the row and the value, instead of `RuntimeError: std::bad_cast`.
+- Writer: `write_record` and `write_columns` on a closed `Writer` raise
+  `OpenYXDBError` instead of crashing.
+- Writer: output files are created with the usual permissions (mode 0666
+  filtered by the umask) instead of owner-only.
 - Reader: a wide-string value containing a lone UTF-16 surrogate raises
   `ConversionError` instead of returning U+FFFD.
 - `sink_yxdb` no longer catches `TypeError` from the query and re-runs it.
@@ -80,8 +91,9 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   names that would be renamed, tz-aware or sub-second temporal values, and
   invalid UTF-8 now raise where they previously wrote NULL, truncated or
   altered data. See the Fixed entries for the full list.
-- A `Writer` that is not closed leaves `<path>.partial`, not `<path>`.
-  An exception inside `with Writer(...)` removes the output.
+- A `Writer` that is not closed never produces `<path>`. An exception inside
+  `with Writer(...)` removes the output; a dropped `Writer` discards it with a
+  `ResourceWarning`.
 
 ## [1.5.0] - 2026-09-19
 
