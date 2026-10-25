@@ -621,6 +621,21 @@ void RecordInfo::InitFromXml(
 	}
 }
 
+std::vector<String> RecordInfo::FieldNamesInXml(const MINIXML_NAMESPACE::MiniXmlParser::TagInfo& xmlTag)
+{
+	std::vector<String> names;
+	if (xmlTag.Start() == NULL)
+		return names;
+	MINIXML_NAMESPACE::MiniXmlParser::TagInfo tagRecordInfo;
+	if (!MINIXML_NAMESPACE::MiniXmlParser::FindXmlTag(xmlTag, tagRecordInfo, _U("RecordInfo")))
+		return names;
+	MINIXML_NAMESPACE::MiniXmlParser::TagInfo tagField;
+	for (bool bFound = MINIXML_NAMESPACE::MiniXmlParser::FindXmlTag(tagRecordInfo, tagField, _U("Field")); bFound;
+		 bFound = MINIXML_NAMESPACE::MiniXmlParser::FindNextXmlTag(tagRecordInfo, tagField, _U("Field")))
+		names.push_back(MINIXML_NAMESPACE::MiniXmlParser::GetAttribute(tagField, _U("name"), true));
+	return names;
+}
+
 SmartPointerRefObj<Record> RecordInfo::CreateRecord() const
 {
 	SmartPointerRefObj<Record> pRet(new Record);

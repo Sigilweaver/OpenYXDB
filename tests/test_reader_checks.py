@@ -71,23 +71,10 @@ def test_scan_raises_on_short_batch(tmp_path, monkeypatch):
     openyxdb.write_yxdb(p, {"a": list(range(10))})
     real = openyxdb.Reader
 
-    class Short:
-        def __init__(self, *a, **k):
-            self._r = real(*a, **k)
-
-        def __getattr__(self, name):
-            return getattr(self._r, name)
-
-        def __enter__(self):
-            self._r.__enter__()
-            return self
-
-        def __exit__(self, *a):
-            return self._r.__exit__(*a)
-
-        def read_columns_subset(self, cols, offset, limit):
-            out = self._r.read_columns_subset(cols, offset, limit)
-            return {k: v[:-1] for k, v in out.items()}
+    class Short(real):
+        def read(self, columns=None, *, offset=0, limit=None):
+            t = super().read(columns, offset=offset, limit=limit)
+            return openyxdb.Table(t.fields, [c.values[:-1] for c in t.columns])
 
     lf = openyxdb.scan_yxdb(p)
     monkeypatch.setattr(openyxdb, "Reader", Short)

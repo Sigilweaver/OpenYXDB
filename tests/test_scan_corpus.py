@@ -14,15 +14,15 @@ from pathlib import Path
 import openyxdb
 import pytest
 from conftest import corpus_files
-from openyxdb._openyxdb import Reader
+from openyxdb import Reader
 
 pl = pytest.importorskip("polars")
 
 # The default narrow-string encoding is strict UTF-8, which some corpus files
 # do not satisfy (they hold single-byte text). Latin-1 decodes every byte, so
 # these tests compare scan and eager reads under one encoding that always works.
-READ = {"narrow_encoding": "latin-1"}
-WRITE = {"narrow_encoding": "latin-1"}
+READ = {"options": openyxdb.ReadOptions(narrow_encoding="latin-1")}
+WRITE = {"options": openyxdb.WriteOptions(narrow_encoding="latin-1")}
 
 ALL_FILES = corpus_files("e1")
 

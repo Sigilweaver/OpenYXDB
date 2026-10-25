@@ -168,6 +168,7 @@ private:
 	SmartPointerRefObj<Record> m_pRecord;
 
 	bool m_bIndexStartsBlock;
+	String m_strFileRecordInfoXml;
 
 	void GoBlockRecord(int64_t nRecord);
 	void ValidateHeader();
@@ -205,5 +206,12 @@ public:
 	void GoRecord(int64_t nRecord = 0);
 
 	WString GetRecordXmlMetaData();
+
+	// The schema XML as stored in the file (GetRecordXmlMetaData regenerates it
+	// from the fields, after any renaming).
+	const String& GetFileRecordInfoXml() const
+	{
+		return m_strFileRecordInfoXml;
+	}
 };
 }}  // namespace Alteryx::OpenYXDB

@@ -17,6 +17,50 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - A missing or unreadable file raises `OpenYXDBFileNotFoundError` or
   `OpenYXDBPermissionError`, which are also `FileNotFoundError` and
   `PermissionError`, with `errno` and `filename` set.
+- `ReadOptions` and `WriteOptions` (keyword-only, immutable) passed as
+  `options=` to `Reader`, `Writer` and every `to_*`, `from_*`, `scan_yxdb`,
+  `sink_yxdb`, `read_yxdb` and `write_yxdb` function. `leniency` takes a
+  `Leniency` flag set; strict (`Leniency.NONE`) is the default. The first flag,
+  `RENAME_DUPLICATE_FIELDS`, keeps the renaming of duplicate E1 field names.
+  Further flags and options will be added as new members and fields.
+- Warnings: `Reader.warnings` and `Table.warnings` list a `Diagnostic` (a
+  `WarningKind`, a code, a message, the field and record) for everything a
+  lenient option relaxed. Each is also issued with `warnings.warn` as
+  `OpenYXDBWarning`. `WarningKind` is an open set; unknown kinds read as
+  `OTHER` with the specific name in `code`.
+- `Table` and `Column`: the result of `Reader.read(columns=None, *, offset=0,
+  limit=None)`. A `Table` keeps file order, carries its `FieldInfo`s, converts
+  with `to_dict`, `to_pyarrow`, `to_pandas` and `to_polars`, and implements the
+  Arrow PyCapsule stream (`__arrow_c_stream__`), so Arrow consumers can read it
+  directly. `Writer.write_columns` and `from_pyarrow` also accept a `Table`.
+- `Reader.fields`, `Reader.warnings`, `Reader.closed`, `Writer.warnings`,
+  `Writer.closed`, `openyxdb.__version__`.
+- `FieldInfo(name=..., type=..., size=..., scale=...)` keyword-only constructor.
+
+### Changed
+
+- API breaks: `openyxdb.Reader` and `openyxdb.Writer` are Python classes over
+  the compiled core (still available as `openyxdb._openyxdb.Reader` and
+  `Writer`). `Reader.read_columns` and `read_columns_subset` are replaced by
+  `Reader.read`; `Reader.read_records` remains. The `narrow_encoding` and
+  `allow_unverified_types` arguments moved into `ReadOptions` and
+  `WriteOptions`. `Writer.__exit__` takes the usual three arguments.
+- API breaks: Date, Time and DateTime values are returned as `datetime.date`,
+  `datetime.time` and `datetime.datetime` by `read_records`, `read_yxdb`,
+  `Reader.read` and the core `Reader` (they were ISO strings, parsed later by
+  the Arrow and Polars helpers). The writer accepts those objects as well as
+  ISO strings. A stored value that is not a valid date or time raises
+  `FormatError` naming the field and record.
+- API breaks: `FieldInfo.size` is 0 for Blob and SpatialObj (it was 2147483647)
+  and `FieldInfo.scale` is 0 for every type except FixedDecimal (it was -1 for
+  most types).
+- E2 FixedDecimal values are returned as `float`, like E1 (they were text, which
+  `to_pyarrow` could not convert).
+- Calling `read`, `read_records` or `num_records` on a closed `Reader`, or
+  `write_record` or `write_columns` on a closed `Writer`, raises
+  `OpenYXDBError` instead of crashing. `ReadOptions` and `WriteOptions` check
+  their argument types; `Reader.read` rejects repeated column names and keeps
+  the row count when `columns=[]`.
 
 ### Fixed
 
@@ -142,6 +186,13 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   `latin-1` (cp1252 leaves five byte values undefined). Files that mix UTF-8
   and single-byte values need a per-value fallback, which is not offered.
 - E2 errors are raised as `FormatError` instead of `RuntimeError`.
+- E1 files whose field names are duplicated (ignoring case), empty or longer
+  than 255 characters used to open with the fields silently renamed
+  (`v`, `v2`, `Field_1`, ...). They now raise `SchemaError` naming the field;
+  `ReadOptions(leniency=Leniency.RENAME_DUPLICATE_FIELDS)` keeps the rename and
+  records a `Diagnostic` for each renamed field.
+- A YXDB field type the Arrow and Polars mappings do not know raises
+  `UnsupportedError` instead of becoming a string column.
 
 ## [1.5.0] - 2026-09-19
 
