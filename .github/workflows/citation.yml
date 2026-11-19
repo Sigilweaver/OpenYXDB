@@ -1,0 +1,17 @@
+name: Citation
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  citation:
+    uses: Sigilweaver/.github/.github/workflows/citation-check.yml@main
+    with:
+      pypi: openyxdb
+      manifest: pyproject.toml
