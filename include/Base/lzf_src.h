@@ -296,6 +296,12 @@ public:
 		nInBufferSize = 0;
 		nInBufferNext = 0;
 	}
+	// True when every decompressed byte of the current chunk has been consumed,
+	// so the file position is at the start of the next chunk.
+	bool IsDrained() const
+	{
+		return nInBufferNext >= nInBufferSize;
+	}
 	unsigned Read(void* pBuffer, unsigned nSize);
 
 	TFileP GetFile()
@@ -346,25 +352,25 @@ unsigned LZFBufferedInput<TFileP, BufferSize>::Read(void* pBuffer, unsigned nSiz
 				}
 			}
 
+			// A chunk is never empty and never larger than the buffers it is
+			// read into; anything else is a corrupt file.
+			if (nResultBytes == 0 || nResultBytes > sizeof(m_pInBuffer))
+				throw Error(ErrorKind::Format, XMSG("Corrupt file: invalid compression chunk length"));
+
 			if (bUncompressed)
 			{
 				nInBufferSize = nResultBytes;
-				if (nInBufferSize > sizeof(m_pOutBuffer))
-				{
-					assert(false);
-					throw Error(XMSG("Internal Error in LZFBufferedInput::Read: Corrupt file"));
-				}
-
 				if (nInBufferSize != m_pFile->Read(m_pOutBuffer, nInBufferSize))
-					throw Error(XMSG("Internal Error in LZFBufferedInput::Read: Not enough bytes read"));
+					throw Error(ErrorKind::Format, XMSG("Internal Error in LZFBufferedInput::Read: Not enough bytes read"));
 			}
 			else
 			{
-				size_t nBytesRead = m_pFile->Read(m_pInBuffer, nResultBytes);
+				if (nResultBytes != m_pFile->Read(m_pInBuffer, nResultBytes))
+					throw Error(ErrorKind::Format, XMSG("Internal Error in LZFBufferedInput::Read: Not enough bytes read"));
 				nInBufferSize = LzfWrapper::lzf_decompress(
-					m_pInBuffer, unsigned(nBytesRead), m_pOutBuffer, unsigned(sizeof(m_pOutBuffer)));
+					m_pInBuffer, nResultBytes, m_pOutBuffer, unsigned(sizeof(m_pOutBuffer)));
 				if (nInBufferSize == 0)
-					return 0;  // EOF - may get in infinite loop
+					throw Error(ErrorKind::Format, XMSG("Corrupt file: compression chunk could not be decompressed"));
 			}
 			nInBufferNext = 0;
 		}

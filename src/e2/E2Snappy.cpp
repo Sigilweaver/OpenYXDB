@@ -26,6 +26,12 @@ void SnappyDecompressRaw(const uint8_t* data, size_t size, std::vector<uint8_t>&
     if (expected > (size_t(1) << 32))
         throw SnappyError("snappy: declared length exceeds 4 GiB");
 
+    // A copy tag yields at most 64 bytes from 3 input bytes, so no input of
+    // `size` bytes can decode to more than about 22 times its length. Refuse a
+    // declared length beyond that before reserving memory for it.
+    if (expected > static_cast<uint64_t>(size) * 22u + 64u)
+        throw SnappyError("snappy: declared length is larger than the input can produce");
+
     out.clear();
     out.reserve(static_cast<size_t>(expected));
 
@@ -51,6 +57,8 @@ void SnappyDecompressRaw(const uint8_t* data, size_t size, std::vector<uint8_t>&
             }
             if (pos + lit_len > size)
                 throw SnappyError("snappy: truncated literal data");
+            if (lit_len > expected - out.size())
+                throw SnappyError("snappy: output exceeds the declared length");
             out.insert(out.end(), data + pos, data + pos + lit_len);
             pos += lit_len;
         } else if (kind == 1) {
@@ -64,6 +72,8 @@ void SnappyDecompressRaw(const uint8_t* data, size_t size, std::vector<uint8_t>&
             pos += 1;
             if (offset == 0 || offset > out.size())
                 throw SnappyError("snappy: copy-1 offset out of range");
+            if (length > expected - out.size())
+                throw SnappyError("snappy: output exceeds the declared length");
             size_t start = out.size() - offset;
             for (size_t i = 0; i < length; ++i)
                 out.push_back(out[start + i]);  // overlap intentional
@@ -79,6 +89,8 @@ void SnappyDecompressRaw(const uint8_t* data, size_t size, std::vector<uint8_t>&
             pos += 2;
             if (offset == 0 || offset > out.size())
                 throw SnappyError("snappy: copy-2 offset out of range");
+            if (length > expected - out.size())
+                throw SnappyError("snappy: output exceeds the declared length");
             size_t start = out.size() - offset;
             for (size_t i = 0; i < length; ++i)
                 out.push_back(out[start + i]);
@@ -97,6 +109,8 @@ void SnappyDecompressRaw(const uint8_t* data, size_t size, std::vector<uint8_t>&
             pos += 4;
             if (offset == 0 || offset > out.size())
                 throw SnappyError("snappy: copy-4 offset out of range");
+            if (length > expected - out.size())
+                throw SnappyError("snappy: output exceeds the declared length");
             size_t start = out.size() - offset;
             for (size_t i = 0; i < length; ++i)
                 out.push_back(out[start + i]);

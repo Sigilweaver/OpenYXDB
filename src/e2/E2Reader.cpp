@@ -638,6 +638,12 @@ public:
     }
     // Advance past `n` bytes without transferring them. `what` names the
     // region being skipped so a truncated file reports where it ran out.
+    // Fail unless `n` more bytes exist, before memory for them is allocated.
+    void Need(int64_t n, const char* what) {
+        if (n < 0 || n > size - pos)
+            Fail(std::string("E2: ") + what + " of " + std::to_string(n) +
+                 " bytes extends past the end of the file");
+    }
     void Skip(int64_t n, const char* what) {
         if (n < 0 || n > size - pos)
             Fail(std::string("E2: short read on ") + what);
@@ -700,6 +706,7 @@ E2Reader::E2Reader(const std::string& path) : m_impl(std::make_unique<Impl>()) {
     if (meta_size == 0 || meta_size > 64u * 1024u * 1024u)
         Fail("E2: metadata size out of range");
 
+    m_impl->file.Need(meta_size, "metadata");
     m_metaXml.assign(meta_size, '\0');
     m_impl->file.Read(m_metaXml.data(), meta_size, "metadata");
 
@@ -1108,6 +1115,7 @@ int64_t E2Reader::NumRecords() {
         uint8_t size_buf[4];
         m_impl->file.Read(size_buf, 4, "block size");
         uint32_t block_size = LoadU32LE(size_buf);
+        m_impl->file.Need(block_size, "block");
         compressed.assign(block_size, 0);
         m_impl->file.Read(compressed.data(), block_size, "block payload");
         if (compressed.empty() || compressed[0] != 0x0A)
@@ -1171,6 +1179,7 @@ void E2Reader::ReadColumnsSubset(const std::vector<size_t>& projection,
             uint32_t block_size = LoadU32LE(size_buf);
             uint8_t hdr20[20];
             m_impl->file.Read(hdr20, 20, "blob block header");
+            m_impl->file.Need(block_size, "block");
             compressed.assign(block_size, 0);
             m_impl->file.Read(compressed.data(), block_size, "blob payload");
             if (compressed.empty() || compressed[0] != 0x0A)
@@ -1203,6 +1212,7 @@ void E2Reader::ReadColumnsSubset(const std::vector<size_t>& projection,
         uint8_t size_buf[4];
         m_impl->file.Read(size_buf, 4, "block size");
         uint32_t block_size = LoadU32LE(size_buf);
+        m_impl->file.Need(block_size, "block");
         compressed.assign(block_size, 0);
         m_impl->file.Read(compressed.data(), block_size, "block payload");
         if (compressed.empty() || compressed[0] != 0x0A)

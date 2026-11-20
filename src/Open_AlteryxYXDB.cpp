@@ -167,6 +167,21 @@ int64_t File_Large::Tell() const
 	return seekPos;
 }
 
+int64_t File_Large::Size() const
+{
+#ifdef __GNUG__
+	struct stat st;
+	if (fstat(m_iFileDescriptor, &st) != 0)
+		File_Large::GetAndThrowError(U16("Error in Size: "));
+	return static_cast<int64_t>(st.st_size);
+#else
+	int64_t size = _filelengthi64(m_iFileDescriptor);
+	if (size < 0)
+		File_Large::GetAndThrowError(U16("Error in Size: "));
+	return size;
+#endif
+}
+
 void File_Large::LSeek(int64_t nPos)
 {
 	int64_t seekPos = 0;
@@ -339,8 +354,32 @@ void Open_AlteryxYXDB::ValidateHeader()
 			std::string("Unsupported YXDB compression version ") + std::to_string(u.nCompressionVersion)
 			+ ", expected 0 or 1");
 
+	// Report an impossible schema length before the finalization check below,
+	// which would otherwise blame a header that was never written.
+	{
+		const int64_t nFileSizeNow = m_pFile->Size();
+		if (u.nMetaInfoLen == 0
+			|| int64_t(sizeof(m_header)) + int64_t(u.nMetaInfoLen) * int64_t(sizeof(U16unit)) > nFileSizeNow)
+			ThrowFormatError(
+				"Corrupt file: schema length " + std::to_string(u.nMetaInfoLen)
+				+ " characters does not fit in a file of " + std::to_string(nFileSizeNow) + " bytes");
+	}
+
 	if (u.nNumRecords < 0)
 		ThrowFormatError(std::string("Invalid YXDB record count ") + std::to_string(u.nNumRecords));
+
+	// The spatial index position is zero in version 4 files; in version 5 files
+	// it points into the file between the end of the schema and the block index.
+	int64_t nDataStartForSpatial = int64_t(sizeof(m_header)) + int64_t(u.nMetaInfoLen) * int64_t(sizeof(U16unit));
+	if (nVersion == 4 && u.nSpatialIndexPos != 0)
+		ThrowFormatError(
+			"Corrupt file: spatial index position " + std::to_string(u.nSpatialIndexPos)
+			+ " in a file version that has no spatial index");
+	if (nVersion == 5 && u.nSpatialIndexPos != 0
+		&& (u.nSpatialIndexPos < nDataStartForSpatial || u.nSpatialIndexPos >= u.nRecordBlockIndexPos))
+		ThrowFormatError(
+			"Corrupt file: spatial index position " + std::to_string(u.nSpatialIndexPos)
+			+ " is outside the record data");
 
 	// The header is rewritten at Close(), so a file whose writer never closed
 	// it still has a zeroed record count and index position.
@@ -350,6 +389,73 @@ void Open_AlteryxYXDB::ValidateHeader()
 			std::string("YXDB file was not finalized: record block index position ")
 			+ std::to_string(u.nRecordBlockIndexPos) + " is before the record data start "
 			+ std::to_string(nDataStart));
+}
+
+void Open_AlteryxYXDB::ReadBlockIndex(int64_t nFileSize)
+{
+	const HeaderData& u = m_header.userHdr;
+	const int64_t nDataStart = int64_t(sizeof(m_header)) + int64_t(u.nMetaInfoLen) * int64_t(sizeof(U16unit));
+	// Written so that no intermediate value can overflow: a record count near
+	// INT64_MAX must not wrap into a plausible block count.
+	const int64_t nExpectedBlocks = u.nNumRecords / RecordsPerBlock + (u.nNumRecords % RecordsPerBlock != 0 ? 1 : 0);
+
+	if (nFileSize < 4 || u.nRecordBlockIndexPos < nDataStart || u.nRecordBlockIndexPos > nFileSize - 4)
+		ThrowFormatError(
+			"Corrupt file: record block index position " + std::to_string(u.nRecordBlockIndexPos)
+			+ " is outside the file");
+
+	m_pFile->LSeek(u.nRecordBlockIndexPos);
+	unsigned nCount = 0;
+	m_pFile->Read(&nCount, sizeof(nCount));
+	if (int64_t(nCount) != nExpectedBlocks)
+		ThrowFormatError(
+			"Corrupt file: record block index has " + std::to_string(nCount) + " entries but "
+			+ std::to_string(u.nNumRecords) + " records need " + std::to_string(nExpectedBlocks));
+	const int64_t nIndexBytes = int64_t(nCount) * 8;
+	if (nIndexBytes > nFileSize - u.nRecordBlockIndexPos - 4)
+		ThrowFormatError("Corrupt file: record block index extends past the end of the file");
+	// Nothing follows the block index in any known file.
+	const int64_t nTrailing = nFileSize - u.nRecordBlockIndexPos - 4 - nIndexBytes;
+	if (nTrailing != 0)
+		ThrowFormatError(
+			"Corrupt file: " + std::to_string(nTrailing) + " bytes follow the record block index");
+
+	m_vRecordBlockIndexPos.assign(nCount, 0);
+	if (nCount > 0)
+		m_pFile->Read(m_vRecordBlockIndexPos.data(), nCount * sizeof(int64_t));
+
+	int64_t nPrev = -1;
+	for (unsigned i = 0; i < nCount; ++i)
+	{
+		int64_t e = m_vRecordBlockIndexPos[i];
+		if (e < nDataStart || e >= u.nRecordBlockIndexPos || e <= nPrev)
+			ThrowFormatError(
+				"Corrupt file: record block index entry " + std::to_string(i) + " (" + std::to_string(e)
+				+ ") is out of range or out of order");
+		nPrev = e;
+	}
+	if (nCount > 0 && m_vRecordBlockIndexPos[0] != nDataStart)
+		ThrowFormatError("Corrupt file: first record block does not start where the schema ends");
+
+	m_pFile->LSeek(nDataStart);
+}
+
+// When records are read in order, the byte stream must arrive exactly at the
+// next block (or at the index after the last one) with no chunk bytes unused.
+// Files with a spatial index interleave spatial index data after the record
+// data of each block, so for those the stream may only end at or before the
+// next block.
+void Open_AlteryxYXDB::CheckStreamAtBlockBoundary(int64_t nExpectedPos, const char* pWhat)
+{
+	bool bDrained = !m_pCompressInput || m_pCompressInput->IsDrained();
+	int64_t nPos = m_pFile->Tell();
+	bool bHasSpatialIndex = m_header.userHdr.nSpatialIndexPos != 0;
+	bool bPosOk = bHasSpatialIndex ? nPos <= nExpectedPos : nPos == nExpectedPos;
+	if (!bDrained || !bPosOk)
+		ThrowFormatError(
+			std::string("Corrupt file: record data ") + pWhat + " ends at byte " + std::to_string(nPos)
+			+ (bDrained ? "" : " with unread data in the last chunk") + ", expected byte "
+			+ (bHasSpatialIndex ? "at most " : "") + std::to_string(nExpectedPos));
 }
 
 /*virtual*/ void Open_AlteryxYXDB::Open(WString strFile)
@@ -365,10 +471,24 @@ void Open_AlteryxYXDB::ValidateHeader()
 	if (m_header.userHdr.nCompressionVersion == 1)
 		m_pCompressInput = std::make_unique<LZFBufferedInput<File_Large*>>(m_pFile.get());
 
-	String strRecordInfoXml;
-	U16unit* pRecordInfoXml = strRecordInfoXml.Lock(m_header.userHdr.nMetaInfoLen);
-	m_pFile->Read(pRecordInfoXml, m_header.userHdr.nMetaInfoLen * sizeof(U16unit));
-	strRecordInfoXml.Unlock();
+	const int64_t nFileSize = m_pFile->Size();
+
+	// The metadata is a UTF-16 string that ends in a NUL; its length is in
+	// characters, including that NUL.
+	const unsigned nMetaChars = m_header.userHdr.nMetaInfoLen;
+	if (nMetaChars == 0 || int64_t(sizeof(m_header)) + int64_t(nMetaChars) * int64_t(sizeof(U16unit)) > nFileSize)
+		ThrowFormatError(
+			std::string("Corrupt file: metadata length ") + std::to_string(nMetaChars)
+			+ " characters does not fit in a file of " + std::to_string(nFileSize) + " bytes");
+
+	std::vector<U16unit> vMeta(size_t(nMetaChars) + 1, 0);
+	m_pFile->Read(vMeta.data(), nMetaChars * sizeof(U16unit));
+	if (vMeta[nMetaChars - 1] != 0)
+		ThrowFormatError("Corrupt file: schema XML is not NUL terminated");
+	for (size_t i = 0; i + 1 < nMetaChars; ++i)
+		if (vMeta[i] == 0)
+			ThrowFormatError("Corrupt file: schema XML contains an embedded NUL at character " + std::to_string(i));
+	String strRecordInfoXml(vMeta.data());
 
 	m_strFileRecordInfoXml = strRecordInfoXml;
 	m_recordInfo.InitFromXml(strRecordInfoXml);
@@ -377,7 +497,11 @@ void Open_AlteryxYXDB::ValidateHeader()
 	m_pRecord = m_recordInfo.CreateRecord();
 
 	// make sure we are at the first record in the file
-	assert(m_pFile->Tell() == int(sizeof(m_header) + m_header.userHdr.nMetaInfoLen * sizeof(U16unit)));
+	if (m_pFile->Tell() != int64_t(sizeof(m_header)) + int64_t(nMetaChars) * int64_t(sizeof(U16unit)))
+		ThrowFormatError("Corrupt file: record data does not start where the schema ends");
+
+	ReadBlockIndex(nFileSize);
+	m_nStreamRecord = 0;
 }
 
 /*virtual*/ WString Open_AlteryxYXDB::GetRecordXmlMetaData()
@@ -401,6 +525,11 @@ void Open_AlteryxYXDB::ValidateHeader()
 		m_recordInfo.Read(*m_pCompressInput, pRec);
 	else
 		m_recordInfo.Read(*m_pFile, pRec);
+	m_nStreamRecord = m_nCurrentRecord;
+
+	// the last record must end exactly where the block index starts
+	if (m_nCurrentRecord == m_header.userHdr.nNumRecords)
+		CheckStreamAtBlockBoundary(m_header.userHdr.nRecordBlockIndexPos, "of the last block");
 
 	return pRec->GetRecord();
 }
@@ -421,20 +550,17 @@ void Open_AlteryxYXDB::GoBlockRecord(int64_t nRecord)
 	}
 	else
 	{
-		if (m_vRecordBlockIndexPos.size() == 0)
-		{
-			m_pFile->LSeek(m_header.userHdr.nRecordBlockIndexPos);
-			unsigned nNewArraySize = 0;
-			m_pFile->Read(&nNewArraySize, sizeof(nNewArraySize));
-			m_vRecordBlockIndexPos.resize(nNewArraySize);
-
-			m_pFile->Read(&*m_vRecordBlockIndexPos.begin(), nNewArraySize * sizeof(int64_t));
-		}
-		int64_t nNewPos = m_vRecordBlockIndexPos[unsigned(nRecord / RecordsPerBlock)];
+		const int64_t nBlock = nRecord / RecordsPerBlock;
+		if (nBlock >= int64_t(m_vRecordBlockIndexPos.size()))
+			ThrowFormatError("Corrupt file: record " + std::to_string(nRecord) + " has no record block index entry");
+		int64_t nNewPos = m_vRecordBlockIndexPos[size_t(nBlock)];
+		if (m_nStreamRecord == nRecord)
+			CheckStreamAtBlockBoundary(nNewPos, ("of block " + std::to_string(nBlock - 1)).c_str());
 		m_pFile->LSeek(nNewPos);
 		if (m_pCompressInput.get())
 			m_pCompressInput->Reset();
 	}
+	m_nStreamRecord = nRecord;
 }
 
 /*virtual*/ void Open_AlteryxYXDB::GoRecord(int64_t nRecord /*= 0*/)
@@ -455,6 +581,7 @@ void Open_AlteryxYXDB::GoBlockRecord(int64_t nRecord)
 			// read record will reset to the correct spot when it tries to read the next record
 			numSkipRecs = unsigned(nRecord % RecordsPerBlock);
 			m_nCurrentRecord = nRecord - numSkipRecs;
+			m_nStreamRecord = -1;
 		}
 
 		for (unsigned x = 0; x < numSkipRecs; x++)

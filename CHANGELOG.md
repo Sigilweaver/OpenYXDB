@@ -6,6 +6,17 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-11-19
+
+### Security
+
+- Reading a crafted E1 `.yxdb` file could corrupt heap memory: compression
+  chunk lengths, the metadata length and the record block index were trusted
+  and used to size reads into fixed buffers (GHSA-6q2j-23mc-2h87). Every
+  release up to 1.5.0 is affected. The E1 and E2 readers now validate these
+  values against the file and the schema; see the E1 and E2 entries under
+  Fixed.
+
 ### Added
 
 - Exception hierarchy: `OpenYXDBError` (a `ValueError`) with subclasses
@@ -163,6 +174,19 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - E2: only format errors mean "this is not the right record layout" while the
   reader probes candidate layouts; any other error (running out of memory, a
   bug) propagates instead of being read as a wrong layout.
+- E1 reader: compression chunk lengths, the metadata length, the record
+  block index (entry count, order and range), the record count, and each
+  record's variable-length data are validated against the file and the
+  schema. Corrupt values raise instead of overrunning a buffer or returning
+  stale or shifted rows. A failed decompression raises. The last record
+  must end where the block index (or spatial index) begins.
+- Wide-string fields with an odd byte length raise.
+- E1 reader: a spatial index position in a version 4 file, or outside the record
+  data in a version 5 file, and bytes after the block index raise. Header
+  fields near the 64-bit limits are rejected without overflow.
+- E2 reader: block and metadata sizes are checked against the file size before
+  memory is reserved, and a Snappy block cannot declare more output than its
+  input can produce or write past its declared length.
 
 ### Behavior changes
 

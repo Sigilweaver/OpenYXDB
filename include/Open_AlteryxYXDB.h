@@ -57,6 +57,7 @@ public:
 	}
 
 	int64_t Tell() const;
+	int64_t Size() const;
 
 	void LSeek(int64_t nPos);
 
@@ -172,6 +173,8 @@ private:
 
 	void GoBlockRecord(int64_t nRecord);
 	void ValidateHeader();
+	void ReadBlockIndex(int64_t nFileSize);
+	void CheckStreamAtBlockBoundary(int64_t nExpectedPos, const char* pWhat);
 
 	std::unique_ptr<LZFBufferedInput<File_Large*>> m_pCompressInput;
 	std::unique_ptr<LZFBufferedOutput<File_Large*, GenericEngineBase>> m_pCompressOutput;
@@ -181,6 +184,10 @@ private:
 
 	// this is always the # of the next record to be read
 	int64_t m_nCurrentRecord;
+
+	// the record number that the byte stream is positioned at, or -1 when the
+	// stream was moved by a seek and does not continue the last record read
+	int64_t m_nStreamRecord = -1;
 
 	// the record blocks are always 64K records, except for the last one
 	std::vector<int64_t> m_vRecordBlockIndexPos;

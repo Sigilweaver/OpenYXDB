@@ -798,6 +798,87 @@ const FieldBase* RecordInfo::GetFieldByName(StringNoCase strField, bool bThrowEr
 	return ret;
 }
 
+void RecordInfo::ValidateVarData(const RecordData* pRec) const
+{
+	if (!m_bContainsVarData)
+		return;
+
+	const char* pBase = ToCharP(pRec);
+	int nVarDataSize;
+	memcpy(&nVarDataSize, pBase + m_nFixedRecordSize, sizeof(int));
+	if (nVarDataSize < 0)
+		throw Error(ErrorKind::Format, XMSG("Corrupt file: negative variable-length data size in record"));
+
+	// Var data follows the 4 byte size field.
+	const int64_t nVarStart = int64_t(m_nFixedRecordSize) + 4;
+	const int64_t nVarEnd = nVarStart + nVarDataSize;
+
+	for (const auto& pField : m_vFields)
+	{
+		if (!pField->m_bIsVarLength)
+			continue;
+
+		const bool bWide = IsWideString(pField->m_ft);
+		const int64_t nFieldOffset = pField->GetOffset();
+		unsigned nPos;
+		memcpy(&nPos, pBase + nFieldOffset, sizeof(nPos));
+
+		if (nPos == 0 || nPos == 1)
+			continue;  // empty / NULL
+
+		int64_t nLength;
+		if ((nPos & 0x80000000) == 0 && (nPos & 0x30000000) != 0)
+		{
+			// small string stored in the 4 byte slot, 1 to 3 bytes
+			if (nPos & 0x40000000)
+				throw Error(
+				ErrorKind::Format,
+				XMSG("Corrupt file: invalid variable-length value in field \"@1\"", pField->GetFieldName()));
+			nLength = nPos >> 28;
+		}
+		else
+		{
+			if ((nPos & 0xC0000000) == 0x40000000)
+				throw Error(
+				ErrorKind::Format,
+				XMSG("Corrupt file: invalid variable-length value in field \"@1\"", pField->GetFieldName()));
+			const int64_t nAt = nFieldOffset + int64_t(nPos & 0x7fffffff);
+			if (nAt < nVarStart || nAt >= nVarEnd)
+				throw Error(
+				ErrorKind::Format,
+				XMSG("Corrupt file: variable-length value of field \"@1\" points outside the record", pField->GetFieldName()));
+			unsigned char nFirst = static_cast<unsigned char>(pBase[nAt]);
+			int64_t nLenBytes;
+			if (nFirst & 1)
+			{
+				nLenBytes = 1;
+				nLength = nFirst >> 1;
+			}
+			else
+			{
+				nLenBytes = 4;
+				if (nAt + 4 > nVarEnd)
+					throw Error(
+				ErrorKind::Format,
+				XMSG("Corrupt file: variable-length value of field \"@1\" points outside the record",
+						pField->GetFieldName()));
+				unsigned nStore;
+				memcpy(&nStore, pBase + nAt, sizeof(nStore));
+				nLength = nStore >> 1;
+			}
+			if (nAt + nLenBytes + nLength > nVarEnd)
+				throw Error(
+				ErrorKind::Format,
+				XMSG("Corrupt file: variable-length value of field \"@1\" extends past the record", pField->GetFieldName()));
+		}
+
+		if (bWide && (nLength & 1))
+			throw Error(
+				ErrorKind::Format,
+				XMSG("Corrupt file: wide string in field \"@1\" has an odd byte length", pField->GetFieldName()));
+	}
+}
+
 /*static*/ void RecordInfo::SetVarDataValue(Record* pRec, int nFieldOffset, unsigned nLen, const void* pValue)
 {
 	unsigned nVarDataPos = 0;

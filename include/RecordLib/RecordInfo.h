@@ -198,6 +198,11 @@ public:
 
 	RECORDLIB_EXPORT_CPP static void SetVarDataValue(Record* pRec, int nFieldOffset, unsigned nLen, const void* pValue);
 
+	// Throws if any variable-length field of a record read from a file points
+	// outside the record's var data, or has a length its type cannot hold.
+	// Call after the whole record, including its var data, has been read.
+	RECORDLIB_EXPORT_CPP void ValidateVarData(const RecordData* pRec) const;
+
 	E1ONLY_RECORDLIB_EXPORT_CPP size_t GetRecordLen(const RecordData* pSrc) const;
 	RECORDLIB_EXPORT_CPP void AssertValid(const RecordData* pSrc) const;
 
@@ -283,16 +288,22 @@ void RecordInfo::Read(TFile& file, Record* r_pRecord) const
 	int nReadSize = m_nFixedRecordSize;
 	if (m_bContainsVarData)
 		nReadSize += sizeof(int);
-	file.Read(r_pRecord->m_pRecord, nReadSize);
+	if (static_cast<int>(file.Read(r_pRecord->m_pRecord, nReadSize)) != nReadSize)
+		throw Error(ErrorKind::Format, XMSG("Corrupt file: record is shorter than its schema"));
 	if (m_bContainsVarData)
 	{
 		int nVarDataSize;
 		memcpy(&nVarDataSize, static_cast<char*>(r_pRecord->m_pRecord) + m_nFixedRecordSize, sizeof(int));
-		assert(nVarDataSize >= 0);
+		if (nVarDataSize < 0)
+			throw Error(ErrorKind::Format, XMSG("Corrupt file: negative variable-length data size in record"));
 		r_pRecord->Allocate(nVarDataSize + 4);
-		if (nVarDataSize > 0)
-			file.Read(static_cast<char*>(r_pRecord->m_pRecord) + m_nFixedRecordSize + sizeof(int), nVarDataSize);
+		if (nVarDataSize > 0
+			&& static_cast<int>(file.Read(
+				   static_cast<char*>(r_pRecord->m_pRecord) + m_nFixedRecordSize + sizeof(int), nVarDataSize))
+				   != nVarDataSize)
+			throw Error(ErrorKind::Format, XMSG("Corrupt file: record variable-length data is truncated"));
 		r_pRecord->m_bVarDataLenUnset = false;
+		ValidateVarData(static_cast<const RecordData*>(r_pRecord->m_pRecord));
 	}
 }
 }  // namespace SRC

@@ -11,9 +11,11 @@ from e1_files import (
     OFF_COMPRESSION,
     OFF_FILE_ID,
     OFF_INDEX_POS,
+    OFF_META_LEN,
     OFF_NUM_RECORDS,
     patch,
     replace_utf16,
+    u32,
     write_int_file,
 )
 
@@ -115,9 +117,13 @@ def test_schema_without_fields_raises(valid):
         read_all(p)
 
 
-def test_truncated_file_reports_sizes_not_errno(valid):
-    p, data = valid
-    p.write_bytes(data[:-60])
+def test_short_read_reports_sizes_not_errno(tmp_path):
+    p = tmp_path / "chunk.yxdb"
+    write_int_file(p, rows=20000)
+    data = p.read_bytes()
+    start = 512 + u32(data, OFF_META_LEN) * 2
+    # Claim a chunk longer than the rest of the file.
+    p.write_bytes(patch(data, start, struct.pack("<I", 0x3FFFF)))
     with pytest.raises(openyxdb.FormatError, match=r"expected \d+ bytes at offset \d+ but got \d+"):
         read_all(p)
 

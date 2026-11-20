@@ -7,8 +7,8 @@ security fixes.
 
 | Version | Supported |
 | ------- | --------- |
-| 1.3.x   | Yes       |
-| < 1.3   | No        |
+| 2.0.x   | Yes       |
+| < 2.0   | No        |
 
 ## Reporting a vulnerability
 
