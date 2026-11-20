@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import resource
 import struct
 import subprocess
 import sys
@@ -25,8 +24,8 @@ def block_size_offset(data: bytes) -> int:
 def run_limited(path: Path, limit_mb: int = 512):
     """Read ``path`` in a child whose address space is capped, so reserving the
     declared size would fail the test instead of succeeding slowly."""
-    if sys.platform == "darwin":
-        pytest.skip("macOS does not enforce RLIMIT_AS, so the address-space cap cannot be applied")
+    if sys.platform in ("darwin", "win32"):
+        pytest.skip("RLIMIT_AS cannot be applied on this platform (macOS does not enforce it; Windows has no resource module)")
     code = (
         "import resource, sys\n"
         f"resource.setrlimit(resource.RLIMIT_AS, ({limit_mb} << 20, {limit_mb} << 20))\n"
