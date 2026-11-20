@@ -25,6 +25,8 @@ def block_size_offset(data: bytes) -> int:
 def run_limited(path: Path, limit_mb: int = 512):
     """Read ``path`` in a child whose address space is capped, so reserving the
     declared size would fail the test instead of succeeding slowly."""
+    if sys.platform == "darwin":
+        pytest.skip("macOS does not enforce RLIMIT_AS, so the address-space cap cannot be applied")
     code = (
         "import resource, sys\n"
         f"resource.setrlimit(resource.RLIMIT_AS, ({limit_mb} << 20, {limit_mb} << 20))\n"
