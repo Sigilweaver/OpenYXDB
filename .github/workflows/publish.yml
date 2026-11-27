@@ -92,3 +92,11 @@ jobs:
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
+
+  github-release:
+    name: Create the GitHub Release
+    needs: [publish]
+    if: github.ref_type == 'tag'
+    permissions:
+      contents: write
+    uses: Sigilweaver/.github/.github/workflows/github-release.yml@main
